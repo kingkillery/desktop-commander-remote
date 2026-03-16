@@ -1,0 +1,73 @@
+# Desktop Commander Remote Hub — Docker Compose
+#
+# Modes:
+#   Local / Pi (systemd already handles Tailscale):
+#     docker compose up -d hub
+#
+#   Cloud (GCP, AWS, Hetzner, etc.) — hub + Tailscale sidecar:
+#     TS_AUTHKEY=tskey-auth-... docker compose --profile cloud up -d
+#
+# The "cloud" profile adds a Tailscale sidecar so the hub gets a stable
+# Tailscale IP on any cloud VM.  Devices connect to the hub's Tailscale
+# hostname; no public port exposure needed for the WebSocket endpoint.
+#
+# To also expose the MCP SSE endpoint publicly (e.g. for ChatGPT/web AI):
+#   - Uncomment the ports section under "hub"
+#   - Put Nginx / Caddy in front for TLS (see docs)
+
+services:
+
+  # ── Tailscale sidecar (cloud profile only) ──────────────────────────────────
+  tailscale:
+    image: tailscale/tailscale:latest
+    profiles: [cloud]
+    hostname: ${TS_HOSTNAME:-dc-remote-hub}
+    environment:
+      - TS_AUTHKEY=${TS_AUTHKEY}
+      - TS_HOSTNAME=${TS_HOSTNAME:-dc-remote-hub}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_USERSPACE=false          # kernel networking (requires NET_ADMIN)
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    restart: unless-stopped
+
+  # ── Hub server ───────────────────────────────────────────────────────────────
+  hub:
+    build: .
+    # Cloud: share Tailscale's network so hub gets the Tailscale IP
+    # Local/Pi: comment out network_mode and use host or bridge networking
+    network_mode: ${HUB_NETWORK_MODE:-bridge}
+    depends_on:
+      - tailscale
+    profiles: [cloud]
+    environment:
+      - PORT=${PORT:-3000}
+      - WS_PORT=${WS_PORT:-3001}
+      - NODE_ENV=production
+    volumes:
+      - hub-data:/root/.desktop-commander-hub
+    restart: unless-stopped
+    # Uncomment to expose MCP SSE publicly (put TLS reverse proxy in front):
+    # ports:
+    #   - "3000:3000"
+
+  # ── Hub server (local/Pi — no Tailscale sidecar) ────────────────────────────
+  hub-local:
+    build: .
+    profiles: [local]
+    network_mode: host          # uses host's Tailscale interface directly
+    environment:
+      - PORT=${PORT:-3000}
+      - WS_PORT=${WS_PORT:-3001}
+      - NODE_ENV=production
+    volumes:
+      - hub-data:/root/.desktop-commander-hub
+    restart: unless-stopped
+
+volumes:
+  tailscale-state:
+  hub-data:

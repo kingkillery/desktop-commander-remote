@@ -1,0 +1,3 @@
+connect_kwargs:
+  key_filename:
+    - ~/.ssh/pk-jim-2

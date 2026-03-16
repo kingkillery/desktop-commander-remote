@@ -1,0 +1,25 @@
+{
+  "name": "dc-remote-device",
+  "version": "1.0.0",
+  "description": "Desktop Commander Remote device client - connect your machine to the Pi hub",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "dc-device": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.12",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.4"
+  }
+}
