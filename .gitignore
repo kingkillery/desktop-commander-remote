@@ -5,6 +5,9 @@
 **/dist/
 **/*.log
 **/.env
+**/.env.personal
+**/.env.local
+**/.env.active
 
 # Python
 **/__pycache__/
