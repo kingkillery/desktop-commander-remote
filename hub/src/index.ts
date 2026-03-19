@@ -23,6 +23,7 @@ const auth = new AuthManager();
 // ─── Express (MCP over SSE) ───────────────────────────────────────────────────
 const app = express();
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Health / status endpoint
 app.get('/health', (_req, res) => {
@@ -39,16 +40,182 @@ app.get('/health', (_req, res) => {
   });
 });
 
+// ─── Simple REST API for MCP Client ───────────────────────────────────────
+// These endpoints provide a simpler alternative to the MCP/JSON-RPC protocol
+
+// Get all tools from all devices
+app.get('/tools', (req, res) => {
+  const apiKey = req.headers.authorization?.replace('Bearer ', '');
+  if (!apiKey || !auth.validate(apiKey)) {
+    res.status(401).json({ error: 'Invalid API key' });
+    return;
+  }
+
+  const tools = registry.getAllTools();
+  res.json(tools);
+});
+
+// Call a tool on a specific device
+app.post('/tools/:toolName', async (req, res) => {
+  const apiKey = req.headers.authorization?.replace('Bearer ', '');
+  if (!apiKey || !auth.validate(apiKey)) {
+    res.status(401).json({ error: 'Invalid API key' });
+    return;
+  }
+
+  const { toolName } = req.params;
+  const args = req.body || {};
+
+  try {
+    const result = await registry.callTool(toolName, args);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// OAuth configuration endpoint - returns client_id for ChatGPT setup
+app.get('/oauth/info', (_req, res) => {
+  const clients = auth.listOAuthClients();
+  if (clients.length === 0) {
+    res.status(500).json({ error: 'No OAuth clients configured' });
+    return;
+  }
+  const client = clients[0];
+  res.json({
+    clientId: client.clientId,
+    authUrl: `https://hub.pkking.computer/oauth/authorize`,
+    tokenUrl: `https://hub.pkking.computer/oauth/token`,
+  });
+});
+
+// ─── OAuth 2.0 Endpoints (for ChatGPT MCP) ───────────────────────────────────────
+
+// CORS headers for OAuth
+app.use('/oauth', (req, res, next) => {
+  res.header('Access-Control-Allow-Origin', '*');
+  res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  next();
+});
+
+// Authorization endpoint - returns a simple success page that redirects back
+app.get('/oauth/authorize', (req, res) => {
+  const { client_id, redirect_uri, response_type, state } = req.query;
+
+  console.log('[OAuth] Authorize request:', { client_id, redirect_uri, response_type });
+
+  // Validate client_id (accept any known client)
+  let client = null;
+  if (client_id) {
+    client = auth.getOAuthClient(client_id as string);
+  }
+
+  // If no valid client, create a temporary one or accept anyway
+  if (!client) {
+    console.warn('[OAuth] Unknown client_id, allowing anyway:', client_id);
+  }
+
+  // For self-hosted, auto-approve and redirect back
+  // In production, you'd show a consent page here
+  const redirectUrl = new URL(redirect_uri as string || 'https://chat.openai.com');
+  redirectUrl.searchParams.set('code', 'auto_approved');
+  if (state) redirectUrl.searchParams.set('state', state as string);
+
+  // Simple HTML that auto-redirects
+  res.send(`<!DOCTYPE html>
+<html>
+<head><title>Authorized</title></head>
+<body>
+<p>Authorized! Redirecting...</p>
+<script>window.location.href = "${redirectUrl.toString()}";</script>
+</body>
+</html>`);
+});
+
+// Token endpoint - exchange code for access token
+app.post('/oauth/token', (req, res) => {
+  const { grant_type, client_id, client_secret, code, redirect_uri } = req.body;
+
+  console.log('[OAuth] Token request:', { grant_type, client_id, code });
+
+  // Validate client credentials (be permissive for now)
+  const validClient = auth.validateOAuthClient(client_id, client_secret);
+  if (!validClient) {
+    // Try accepting any client_secret for development
+    const keys = auth.listKeys();
+    keys.then(apiKeys => {
+      if (apiKeys.length > 0) {
+        // Accept any valid client for now
+        res.json({
+          access_token: apiKeys[0].key,
+          token_type: 'bearer',
+          expires_in: 3600,
+        });
+      } else {
+        res.status(401).json({ error: 'invalid_client' });
+      }
+    });
+    return;
+  }
+
+  if (grant_type !== 'authorization_code') {
+    res.status(400).json({ error: 'unsupported_grant_type' });
+    return;
+  }
+
+  // In simple mode: access token is the API key
+  // The code "auto_approved" maps to the default API key
+  const accessToken = auth.listKeys().then(keys => keys[0]?.key || 'default');
+
+  accessToken.then(token => {
+    res.json({
+      access_token: token,
+      token_type: 'bearer',
+      expires_in: 3600,
+    });
+  });
+});
+
+// ─── MCP SSE Endpoint (with Bearer token support) ───────────────────────────────
+
 // MCP SSE endpoint — one MCP server per AI client connection
 const sseTransports = new Map<string, SSEServerTransport>();
 
+// API key / Bearer token validation for SSE endpoint
+function validateApiKey(req: express.Request): boolean {
+  // Check query param
+  const queryKey = req.query.api_key as string;
+  if (queryKey && auth.validate(queryKey)) return true;
+
+  // Check x-api-key header
+  const headerKey = req.headers['x-api-key'] as string;
+  if (headerKey && auth.validate(headerKey)) return true;
+
+  // Check Authorization: Bearer <token>
+  const authHeader = req.headers['authorization'] as string;
+  if (authHeader?.startsWith('Bearer ')) {
+    const bearerToken = authHeader.slice(7);
+    if (auth.validateAccessToken(bearerToken)) return true;
+  }
+
+  return false;
+}
+
 app.get('/sse', (req, res) => {
+  // Require API key for SSE connections
+  if (!validateApiKey(req)) {
+    res.status(401).json({ error: 'Invalid or missing API key. Add ?api_key=YOUR_KEY to the URL.' });
+    return;
+  }
+
   const clientId = req.headers['x-forwarded-for']?.toString() || req.socket.remoteAddress || 'unknown';
   console.log(`[MCP] AI client connected: ${clientId}`);
 
   const transport = new SSEServerTransport('/messages', res);
-  const connectionId = Math.random().toString(36).slice(2);
-  sseTransports.set(connectionId, transport);
+
+  // Store transport using the MCP SDK's session ID immediately
+  sseTransports.set(transport.sessionId, transport);
+  console.log(`[MCP] Session stored: ${transport.sessionId}`);
 
   const mcpServer = buildMcpServer();
   mcpServer.connect(transport).catch((err) => {
@@ -56,20 +223,32 @@ app.get('/sse', (req, res) => {
   });
 
   res.on('close', () => {
-    sseTransports.delete(connectionId);
+    sseTransports.delete(transport.sessionId);
     console.log(`[MCP] AI client disconnected: ${clientId}`);
   });
 });
 
-app.post('/messages', (req, res) => {
+app.post('/messages', async (req, res) => {
+  // Skip auth check - session ID proves authentication (was validated on /sse)
   // Route to the right transport by session ID in query
   const sessionId = req.query.sessionId as string;
+  console.log(`[MCP] POST /messages, session: ${sessionId?.substring(0, 8)}...`);
   const transport = sseTransports.get(sessionId);
   if (!transport) {
+    console.log(`[MCP] Transport not found for session: ${sessionId?.substring(0, 8)}`);
     res.status(404).json({ error: 'Session not found' });
     return;
   }
-  transport.handlePostMessage(req, res);
+  try {
+    console.log(`[MCP] Calling handlePostMessage`);
+    await transport.handlePostMessage(req, res);
+    console.log(`[MCP] handlePostMessage completed`);
+  } catch (err: any) {
+    console.error(`[MCP] handlePostMessage error:`, err.message, err.stack);
+    if (!res.headersSent) {
+      res.status(500).json({ error: err.message });
+    }
+  }
 });
 
 function buildMcpServer(): McpServer {
