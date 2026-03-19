@@ -5,6 +5,8 @@
 **/dist/
 **/*.log
 **/.env
+**/.env.*
+device-deploy.zip
 
 # Python
 **/__pycache__/
