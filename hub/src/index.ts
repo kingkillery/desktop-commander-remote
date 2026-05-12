@@ -67,6 +67,18 @@ app.get('/health', (_req, res) => {
   });
 });
 
+// OAuth discovery endpoint (required by ChatGPT MCP)
+app.get('/.well-known/oauth-authorization-server', (_req, res) => {
+  const publicUrl = process.env.PUBLIC_URL || `http://localhost:${PORT}`;
+  res.json({
+    issuer: publicUrl,
+    authorization_endpoint: `${publicUrl}/oauth/authorize`,
+    token_endpoint: `${publicUrl}/oauth/token`,
+    response_types_supported: ['code'],
+    code_challenge_methods_supported: ['S256'],
+  });
+});
+
 // ─── Simple REST API for MCP Client ───────────────────────────────────────
 // These endpoints provide a simpler alternative to the MCP/JSON-RPC protocol
 
@@ -321,7 +333,10 @@ app.get('/sse', (req, res) => {
   // Require API key for SSE connections
   if (!validateApiKey(req)) {
     console.warn(`[MCP] Rejected SSE connection from ${clientIp}: invalid API key`);
-    res.status(401).json({ error: 'Invalid or missing API key. Add ?api_key=YOUR_KEY to the URL.' });
+    const publicUrl = process.env.PUBLIC_URL || `http://${req.headers.host}`;
+    res.status(401)
+      .header('WWW-Authenticate', `Bearer realm="desktop-commander-remote", authorization_uri="${publicUrl}/oauth/authorize", token_uri="${publicUrl}/oauth/token"`)
+      .json({ error: 'Invalid or missing API key.' });
     return;
   }
 
