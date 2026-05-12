@@ -75,17 +75,19 @@ app.post('/tools/:toolName', async (req, res) => {
 });
 
 // OAuth configuration endpoint - returns client_id for ChatGPT setup
-app.get('/oauth/info', (_req, res) => {
+app.get('/oauth/info', (req, res) => {
   const clients = auth.listOAuthClients();
   if (clients.length === 0) {
     res.status(500).json({ error: 'No OAuth clients configured' });
     return;
   }
   const client = clients[0];
+  // Use PUBLIC_URL env var, or derive from request host, or fall back to localhost
+  const publicUrl = process.env.PUBLIC_URL || `http://${req.headers.host}`;
   res.json({
     clientId: client.clientId,
-    authUrl: `https://hub.pkking.computer/oauth/authorize`,
-    tokenUrl: `https://hub.pkking.computer/oauth/token`,
+    authUrl: `${publicUrl}/oauth/authorize`,
+    tokenUrl: `${publicUrl}/oauth/token`,
   });
 });
 
