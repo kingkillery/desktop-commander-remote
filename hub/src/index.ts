@@ -43,7 +43,9 @@ function getClientIp(req: express.Request): string {
   return req.socket.remoteAddress || 'unknown';
 }
 
-const CONSENT_PASSWORD = process.env.CONSENT_PASSWORD;
+const OAUTH_USERNAME = process.env.OAUTH_USERNAME;
+const OAUTH_PASSWORD = process.env.OAUTH_PASSWORD;
+const OAUTH_ENABLED = !!(OAUTH_USERNAME && OAUTH_PASSWORD);
 
 // ─── Express (MCP over SSE) ───────────────────────────────────────────────────
 const app = express();
@@ -141,7 +143,7 @@ app.use('/oauth', (req, res, next) => {
   const origin = req.headers.origin;
   if (origin && allowedOrigins.includes(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
-  } else if (!CONSENT_PASSWORD) {
+  } else if (!OAUTH_ENABLED) {
     // Local/dev mode: allow any origin
     res.header('Access-Control-Allow-Origin', '*');
   }
@@ -176,8 +178,8 @@ app.get('/oauth/authorize', (req, res) => {
     console.warn('[OAuth] Unknown client_id, allowing anyway:', client_id);
   }
 
-  // If CONSENT_PASSWORD is set, show a password gate
-  if (CONSENT_PASSWORD) {
+  // If OAuth credentials are set, show a login gate
+  if (OAUTH_ENABLED) {
     const returnUrl = req.url;
     res.send(`<!DOCTYPE html>
 <html>
@@ -188,10 +190,11 @@ button{background:#10a37f;color:#fff;border:none;cursor:pointer}
 button:hover{background:#0d8c6d}</style></head>
 <body>
 <h2>Authorize ChatGPT</h2>
-<p>Enter the consent password to allow ChatGPT to access Desktop Commander tools.</p>
+<p>Sign in to allow ChatGPT to access Desktop Commander tools.</p>
 <form method="POST" action="/oauth/approve">
 <input type="hidden" name="return_url" value="${encodeURIComponent(returnUrl)}">
-<input type="password" name="password" placeholder="Consent password" required autofocus>
+<input type="text" name="username" placeholder="Username" required autofocus>
+<input type="password" name="password" placeholder="Password" required>
 <button type="submit">Allow</button>
 </form>
 </body></html>`);
@@ -215,9 +218,9 @@ button:hover{background:#0d8c6d}</style></head>
 
 // OAuth approval POST handler (password gate)
 app.post('/oauth/approve', (req, res) => {
-  const { password, return_url } = req.body;
-  if (password !== CONSENT_PASSWORD) {
-    res.status(403).send('<h1>403 Forbidden</h1><p>Invalid password. <a href="/oauth/authorize">Try again</a></p>');
+  const { username, password, return_url } = req.body;
+  if (OAUTH_ENABLED && (username !== OAUTH_USERNAME || password !== OAUTH_PASSWORD)) {
+    res.status(403).send('<h1>403 Forbidden</h1><p>Invalid username or password. <a href="/oauth/authorize">Try again</a></p>');
     return;
   }
 
