@@ -1,7 +1,7 @@
 # Register DC-Remote-Device as a scheduled task that starts at login
 $node   = "C:\Program Files\nodejs\node.exe"
-$script = "C:\Users\prest\Desktop\Desktop-Projects\Desktop-Commander-Remote\device\dist\index.js"
-$wdir   = "C:\Users\prest\Desktop\Desktop-Projects\Desktop-Commander-Remote\device"
+$script = "C:\dev\Desktop-Projects\Desktop-Commander-Remote\device\dist\index.js"
+$wdir   = "C:\dev\Desktop-Projects\Desktop-Commander-Remote\device"
 
 $action    = New-ScheduledTaskAction -Execute $node -Argument $script -WorkingDirectory $wdir
 $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
