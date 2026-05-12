@@ -20,9 +20,9 @@
     Claude / Codex / MCP clients                                    (local MCP)
 ```
 
-- **Port 3000**: HTTP health (`/health`), MCP SSE (`/sse`), REST tools (`/tools/*`)
-- **Port 3001**: WebSocket device registrations (`/`) — devices connect here
-- **Single-port mode**: Set `SINGLE_PORT=true` in hub `.env` to run everything on one port
+- **Port 3000**: HTTP health (`/health`), MCP SSE (`/sse`), REST tools (`/tools/*`), WebSocket device registrations (`/`)
+- The hub runs in **single-port mode by default** (WebSocket upgrades share the HTTP server on port 3000)
+- To use dual-port mode, set `WS_PORT=3001` in the hub environment (not `.env` — the hub does not auto-load `.env` files)
 
 ---
 
@@ -66,15 +66,22 @@ pm2 delete dcr-hub
 ### 1. Start Hub (on Mac Mini)
 
 ```bash
-cd ~/Desktop-Commander-Remote/hub   # or wherever the repo lives on the Mac
-npm install                          # if needed
+cd ~/Desktop-Commander-Remote/hub
+npm install
 npm run build
-node dist/index.js
+PORT=3000 API_KEY=f212084b-6e26-4fde-84dd-eb2ae11817c5 node dist/index.js
+```
+
+Or with `nohup`:
+```bash
+cd ~/Desktop-Commander-Remote/hub
+nohup node dist/index.js > hub.log 2>&1 &
 ```
 
 Or with PM2 for persistence:
 ```bash
-pm2 start dist/index.js --name dcr-hub --cwd ./hub
+cd ~/Desktop-Commander-Remote/hub
+pm2 start dist/index.js --name dcr-hub --env PORT=3000 --env API_KEY=f212084b-6e26-4fde-84dd-eb2ae11817c5
 pm2 save
 ```
 
@@ -98,17 +105,17 @@ node dist\index.js
 
 ## Environment / Config
 
-### Hub `.env` (Mac Mini)
-```
+### Hub environment (Mac Mini)
+The hub does **not** auto-load `.env` files. Pass vars explicitly or use a process manager.
+```bash
 PORT=3000
-WS_PORT=3001
 API_KEY=f212084b-6e26-4fde-84dd-eb2ae11817c5
-SINGLE_PORT=false
+# WS_PORT is optional; omitting it enables single-port mode (default)
 ```
 
 ### Device `.env` (Windows)
 ```
-DC_HUB_URL=ws://100.76.176.119:3001
+DC_HUB_URL=ws://100.76.176.119:3000
 DC_HUB_API_KEY=f212084b-6e26-4fde-84dd-eb2ae11817c5
 DC_DEVICE_ID=msi-windows-main
 DC_DEVICE_NAME=MSI Windows Main
