@@ -20,6 +20,31 @@ const SINGLE_PORT = WS_PORT === null || WS_PORT === PORT;
 const registry = new DeviceRegistry();
 const auth = new AuthManager();
 
+// ─── Security: Rate Limiting ───────────────────────────────────────────────────
+class SimpleRateLimiter {
+  private requests = new Map<string, number[]>();
+  isAllowed(key: string, maxRequests: number, windowMs: number): boolean {
+    const now = Date.now();
+    const windowStart = now - windowMs;
+    const timestamps = this.requests.get(key) || [];
+    const recent = timestamps.filter((t) => t > windowStart);
+    if (recent.length >= maxRequests) return false;
+    recent.push(now);
+    this.requests.set(key, recent);
+    return true;
+  }
+}
+const oauthRateLimiter = new SimpleRateLimiter();
+const sseRateLimiter = new SimpleRateLimiter();
+
+function getClientIp(req: express.Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string') return forwarded.split(',')[0].trim();
+  return req.socket.remoteAddress || 'unknown';
+}
+
+const CONSENT_PASSWORD = process.env.CONSENT_PASSWORD;
+
 // ─── Express (MCP over SSE) ───────────────────────────────────────────────────
 const app = express();
 app.use(express.json());
@@ -43,10 +68,19 @@ app.get('/health', (_req, res) => {
 // ─── Simple REST API for MCP Client ───────────────────────────────────────
 // These endpoints provide a simpler alternative to the MCP/JSON-RPC protocol
 
+const restRateLimiter = new SimpleRateLimiter();
+
 // Get all tools from all devices
 app.get('/tools', (req, res) => {
+  const clientIp = getClientIp(req);
+  if (!restRateLimiter.isAllowed(`rest:${clientIp}`, 60, 60000)) {
+    res.status(429).json({ error: 'Too many requests' });
+    return;
+  }
+
   const apiKey = req.headers.authorization?.replace('Bearer ', '');
   if (!apiKey || !auth.validate(apiKey)) {
+    console.warn(`[REST] Rejected /tools from ${clientIp}: invalid API key`);
     res.status(401).json({ error: 'Invalid API key' });
     return;
   }
@@ -57,14 +91,22 @@ app.get('/tools', (req, res) => {
 
 // Call a tool on a specific device
 app.post('/tools/:toolName', async (req, res) => {
+  const clientIp = getClientIp(req);
+  if (!restRateLimiter.isAllowed(`tool:${clientIp}`, 60, 60000)) {
+    res.status(429).json({ error: 'Too many requests' });
+    return;
+  }
+
   const apiKey = req.headers.authorization?.replace('Bearer ', '');
   if (!apiKey || !auth.validate(apiKey)) {
+    console.warn(`[REST] Rejected tool call from ${clientIp}: invalid API key`);
     res.status(401).json({ error: 'Invalid API key' });
     return;
   }
 
   const { toolName } = req.params;
   const args = req.body || {};
+  console.log(`[REST] Tool call from ${clientIp}: ${toolName}`);
 
   try {
     const result = await registry.callTool(toolName, args);
@@ -93,37 +135,74 @@ app.get('/oauth/info', (req, res) => {
 
 // ─── OAuth 2.0 Endpoints (for ChatGPT MCP) ───────────────────────────────────────
 
-// CORS headers for OAuth
+// CORS headers for OAuth — restrict to known origins when public
 app.use('/oauth', (req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
+  const allowedOrigins = ['https://chat.openai.com', 'https://chatgpt.com'];
+  const origin = req.headers.origin;
+  if (origin && allowedOrigins.includes(origin)) {
+    res.header('Access-Control-Allow-Origin', origin);
+  } else if (!CONSENT_PASSWORD) {
+    // Local/dev mode: allow any origin
+    res.header('Access-Control-Allow-Origin', '*');
+  }
   res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  if (req.method === 'OPTIONS') {
+    res.sendStatus(200);
+    return;
+  }
   next();
 });
 
-// Authorization endpoint - returns a simple success page that redirects back
+// Authorization endpoint — password-gated when CONSENT_PASSWORD is set
 app.get('/oauth/authorize', (req, res) => {
   const { client_id, redirect_uri, response_type, state } = req.query;
+  const clientIp = getClientIp(req);
 
-  console.log('[OAuth] Authorize request:', { client_id, redirect_uri, response_type });
+  console.log(`[OAuth] Authorize request from ${clientIp}:`, { client_id, redirect_uri, response_type });
+
+  // Rate limit
+  if (!oauthRateLimiter.isAllowed(`auth:${clientIp}`, 10, 60000)) {
+    res.status(429).send('<h1>429 Too Many Requests</h1><p>Please try again later.</p>');
+    return;
+  }
 
   // Validate client_id (accept any known client)
   let client = null;
   if (client_id) {
     client = auth.getOAuthClient(client_id as string);
   }
-
-  // If no valid client, create a temporary one or accept anyway
   if (!client) {
     console.warn('[OAuth] Unknown client_id, allowing anyway:', client_id);
   }
 
-  // For self-hosted, auto-approve and redirect back
-  // In production, you'd show a consent page here
+  // If CONSENT_PASSWORD is set, show a password gate
+  if (CONSENT_PASSWORD) {
+    const returnUrl = req.url;
+    res.send(`<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Authorize Desktop Commander</title>
+<style>body{font-family:sans-serif;max-width:400px;margin:60px auto;padding:20px}
+input,button{padding:10px;font-size:16px;width:100%;box-sizing:border-box;margin-top:8px}
+button{background:#10a37f;color:#fff;border:none;cursor:pointer}
+button:hover{background:#0d8c6d}</style></head>
+<body>
+<h2>Authorize ChatGPT</h2>
+<p>Enter the consent password to allow ChatGPT to access Desktop Commander tools.</p>
+<form method="POST" action="/oauth/approve">
+<input type="hidden" name="return_url" value="${encodeURIComponent(returnUrl)}">
+<input type="password" name="password" placeholder="Consent password" required autofocus>
+<button type="submit">Allow</button>
+</form>
+</body></html>`);
+    return;
+  }
+
+  // Dev/local mode: auto-approve
   const redirectUrl = new URL(redirect_uri as string || 'https://chat.openai.com');
   redirectUrl.searchParams.set('code', 'auto_approved');
   if (state) redirectUrl.searchParams.set('state', state as string);
 
-  // Simple HTML that auto-redirects
   res.send(`<!DOCTYPE html>
 <html>
 <head><title>Authorized</title></head>
@@ -134,11 +213,35 @@ app.get('/oauth/authorize', (req, res) => {
 </html>`);
 });
 
+// OAuth approval POST handler (password gate)
+app.post('/oauth/approve', (req, res) => {
+  const { password, return_url } = req.body;
+  if (password !== CONSENT_PASSWORD) {
+    res.status(403).send('<h1>403 Forbidden</h1><p>Invalid password. <a href="/oauth/authorize">Try again</a></p>');
+    return;
+  }
+
+  const url = new URL(return_url, `http://${req.headers.host}`);
+  const redirect_uri = url.searchParams.get('redirect_uri') || 'https://chat.openai.com';
+  const state = url.searchParams.get('state');
+
+  const redirectUrl = new URL(redirect_uri);
+  redirectUrl.searchParams.set('code', 'auto_approved');
+  if (state) redirectUrl.searchParams.set('state', state);
+
+  res.redirect(redirectUrl.toString());
+});
+
 // Token endpoint - exchange code for access token
 app.post('/oauth/token', (req, res) => {
-  const { grant_type, client_id, client_secret, code, redirect_uri } = req.body;
+  const clientIp = getClientIp(req);
+  if (!oauthRateLimiter.isAllowed(`token:${clientIp}`, 10, 60000)) {
+    res.status(429).json({ error: 'too_many_requests' });
+    return;
+  }
 
-  console.log('[OAuth] Token request:', { grant_type, client_id, code });
+  const { grant_type, client_id, client_secret, code, redirect_uri } = req.body;
+  console.log(`[OAuth] Token request from ${clientIp}:`, { grant_type, client_id, code });
 
   // Validate client credentials (be permissive for now)
   const validClient = auth.validateOAuthClient(client_id, client_secret);
@@ -204,14 +307,22 @@ function validateApiKey(req: express.Request): boolean {
 }
 
 app.get('/sse', (req, res) => {
+  const clientIp = getClientIp(req);
+
+  // Rate limit SSE connections
+  if (!sseRateLimiter.isAllowed(`sse:${clientIp}`, 10, 60000)) {
+    res.status(429).json({ error: 'Too many connection attempts. Please try again later.' });
+    return;
+  }
+
   // Require API key for SSE connections
   if (!validateApiKey(req)) {
+    console.warn(`[MCP] Rejected SSE connection from ${clientIp}: invalid API key`);
     res.status(401).json({ error: 'Invalid or missing API key. Add ?api_key=YOUR_KEY to the URL.' });
     return;
   }
 
-  const clientId = req.headers['x-forwarded-for']?.toString() || req.socket.remoteAddress || 'unknown';
-  console.log(`[MCP] AI client connected: ${clientId}`);
+  console.log(`[MCP] AI client connected: ${clientIp}`);
 
   const transport = new SSEServerTransport('/messages', res);
 
@@ -226,7 +337,7 @@ app.get('/sse', (req, res) => {
 
   res.on('close', () => {
     sseTransports.delete(transport.sessionId);
-    console.log(`[MCP] AI client disconnected: ${clientId}`);
+    console.log(`[MCP] AI client disconnected: ${clientIp}`);
   });
 });
 
