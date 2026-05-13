@@ -111,6 +111,8 @@ The hub does **not** auto-load `.env` files. Pass vars explicitly or use a proce
 PORT=3000
 API_KEY=f212084b-6e26-4fde-84dd-eb2ae11817c5
 # WS_PORT is optional; omitting it enables single-port mode (default)
+# Default working directory pinned for new MCP sessions (must be inside an approved root):
+DEFAULT_APPROVED_DIRECTORY='C:\Users\prest\.mcporter'
 ```
 
 ### Device `.env` (Windows)
@@ -170,6 +172,7 @@ Invoke-RestMethod http://100.76.176.119:3000/tools/start_process -Method POST -H
 | `0x8007010B` task error | Wrong path in scheduled task | Re-run `register-windows.ps1` or fix path manually |
 | 0 tools registered | Desktop Commander not found | Install DC globally: `npm i -g @wonderwhy-er/desktop-commander` |
 | SSE connection refused | Wrong API key | Check hub `.env` key matches `mcporter.json` |
+| OAuth login returns 400 after callback | Redirect host blocked by allowlist | Verify callback host is `chat.openai.com`, `chatgpt.com`, or `chat.com` |
 | Task won't auto-start | Not configured for logon | `register-windows.ps1` sets `AtLogon` trigger |
 
 ---

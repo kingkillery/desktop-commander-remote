@@ -1,5 +1,5 @@
 import { WebSocket } from 'ws';
-import { DeviceInfo, DeviceTool, DeviceMessage, PendingCall } from './types.js';
+import { DeviceInfo, DeviceTool, DeviceMessage, JobStartArgs, PendingCall } from './types.js';
 import { randomUUID } from 'crypto';
 
 export class DeviceRegistry {
@@ -97,12 +97,24 @@ export class DeviceRegistry {
 
     const entry = this.devices.get(deviceId)!;
     const actualToolName = this.resolveToolName(deviceId, toolName);
+    return this.callToolOnDevice(deviceId, actualToolName, toolArgs, metadata, timeoutMs);
+  }
+
+  async callToolOnDevice(
+    deviceId: string,
+    toolName: string,
+    toolArgs: Record<string, unknown>,
+    metadata?: Record<string, unknown>,
+    timeoutMs = 120_000
+  ): Promise<unknown> {
+    const entry = this.devices.get(deviceId);
+    if (!entry) throw new Error(`Device not connected: ${deviceId}`);
     const callId = randomUUID();
 
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
         entry.pending.delete(callId);
-        reject(new Error(`Tool call timed out after ${timeoutMs}ms: ${actualToolName}`));
+        reject(new Error(`Tool call timed out after ${timeoutMs}ms: ${toolName}`));
       }, timeoutMs);
 
       entry.pending.set(callId, { resolve, reject, timeoutId });
@@ -110,7 +122,7 @@ export class DeviceRegistry {
       const msg: DeviceMessage = {
         type: 'tool_call',
         callId,
-        toolName: actualToolName,
+        toolName,
         toolArgs,
         metadata,
       };
@@ -144,5 +156,85 @@ export class DeviceRegistry {
 
   isConnected(deviceId: string): boolean {
     return this.devices.has(deviceId);
+  }
+
+  getDeviceIdForRequest(deviceId?: string): string {
+    if (deviceId) {
+      if (!this.devices.has(deviceId)) throw new Error(`Device not connected: ${deviceId}`);
+      return deviceId;
+    }
+    if (this.devices.size === 1) {
+      return this.devices.keys().next().value!;
+    }
+    if (this.devices.size === 0) {
+      throw new Error('No devices connected. Start the device client on your machine.');
+    }
+    throw new Error('Multiple devices connected. Provide deviceId.');
+  }
+
+  sendJobStart(jobArgs: JobStartArgs, deviceId?: string, timeoutMs = 30_000): Promise<unknown> {
+    return this.sendJobMessage(this.getDeviceIdForRequest(deviceId), (callId) => ({
+      type: 'job_start',
+      callId,
+      jobArgs,
+    }), timeoutMs);
+  }
+
+  sendJobStatus(jobId: string, deviceId?: string, timeoutMs = 30_000): Promise<unknown> {
+    return this.sendJobMessage(this.getDeviceIdForRequest(deviceId), (callId) => ({
+      type: 'job_status',
+      callId,
+      jobId,
+    }), timeoutMs);
+  }
+
+  sendJobTail(
+    jobId: string,
+    stream?: 'stdout' | 'stderr' | 'both',
+    bytes?: number,
+    deviceId?: string,
+    timeoutMs = 30_000
+  ): Promise<unknown> {
+    return this.sendJobMessage(this.getDeviceIdForRequest(deviceId), (callId) => ({
+      type: 'job_tail',
+      callId,
+      jobId,
+      stream,
+      bytes,
+    }), timeoutMs);
+  }
+
+  sendJobCancel(jobId: string, deviceId?: string, timeoutMs = 30_000): Promise<unknown> {
+    return this.sendJobMessage(this.getDeviceIdForRequest(deviceId), (callId) => ({
+      type: 'job_cancel',
+      callId,
+      jobId,
+    }), timeoutMs);
+  }
+
+  private sendJobMessage(
+    deviceId: string,
+    build: (callId: string) => DeviceMessage,
+    timeoutMs: number
+  ): Promise<unknown> {
+    const entry = this.devices.get(deviceId);
+    if (!entry) throw new Error(`Device not connected: ${deviceId}`);
+    const callId = randomUUID();
+
+    return new Promise((resolve, reject) => {
+      const timeoutId = setTimeout(() => {
+        entry.pending.delete(callId);
+        reject(new Error(`Job request timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+      entry.pending.set(callId, { resolve, reject, timeoutId });
+
+      entry.ws.send(JSON.stringify(build(callId)), (err) => {
+        if (err) {
+          clearTimeout(timeoutId);
+          entry.pending.delete(callId);
+          reject(new Error(`Failed to send job request: ${err.message}`));
+        }
+      });
+    });
   }
 }

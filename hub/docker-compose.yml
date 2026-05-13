@@ -47,6 +47,10 @@ services:
     environment:
       - PORT=${PORT:-3000}
       - WS_PORT=${WS_PORT:-3001}
+      - PUBLIC_URL=${PUBLIC_URL:-}
+      - OAUTH_USERNAME=${OAUTH_USERNAME:-}
+      - OAUTH_PASSWORD=${OAUTH_PASSWORD:-}
+      - DEFAULT_APPROVED_DIRECTORY=${DEFAULT_APPROVED_DIRECTORY:-C:\\Users\\prest\\.mcporter}
       - NODE_ENV=production
     volumes:
       - hub-data:/root/.desktop-commander-hub
@@ -63,6 +67,10 @@ services:
     environment:
       - PORT=${PORT:-3000}
       - WS_PORT=${WS_PORT:-3001}
+      - PUBLIC_URL=${PUBLIC_URL:-}
+      - OAUTH_USERNAME=${OAUTH_USERNAME:-}
+      - OAUTH_PASSWORD=${OAUTH_PASSWORD:-}
+      - DEFAULT_APPROVED_DIRECTORY=${DEFAULT_APPROVED_DIRECTORY:-C:\\Users\\prest\\.mcporter}
       - NODE_ENV=production
     volumes:
       - hub-data:/root/.desktop-commander-hub
