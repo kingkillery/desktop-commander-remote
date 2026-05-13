@@ -13,6 +13,7 @@ import { DeviceRegistry } from './device-registry.js';
 import { HubJobRegistry } from './job-registry.js';
 import { AuthManager } from './auth.js';
 import { HubMessage, JobStartArgs } from './types.js';
+import { CliMcpRegistry } from './cli-mcp-adapter.js';
 import { isAllowedRedirectUri, OAUTH_ALLOWED_ORIGINS } from './oauth.js';
 import { getJobTools, validateJobStartArgs } from './job-tools.js';
 import { getDirectoryTools, isDirectoryTool } from './directory-tools.js';
@@ -32,6 +33,7 @@ const SINGLE_PORT = WS_PORT === null || WS_PORT === PORT;
 const registry = new DeviceRegistry();
 const jobs = new HubJobRegistry();
 const auth = new AuthManager();
+const cliRegistry = new CliMcpRegistry();
 
 // ─── Security: Rate Limiting ───────────────────────────────────────────────────
 class SimpleRateLimiter {
@@ -64,8 +66,14 @@ const PUBLIC_BASE_PATH = getPublicBasePath();
 // ─── Express (MCP over SSE) ───────────────────────────────────────────────────
 const app = express();
 app.set('trust proxy', true);
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Body parsers — applied only to routes that need them.
+// /messages must NOT be parsed (MCP SDK reads raw stream).
+const jsonParser = express.json();
+const urlencodedParser = express.urlencoded({ extended: true });
+
+app.use('/oauth', jsonParser);
+app.use('/oauth', urlencodedParser);
+app.use('/tools', jsonParser);
 
 function getPublicUrl(req?: express.Request): string {
   if (process.env.PUBLIC_URL) {
@@ -98,6 +106,12 @@ function getPublicBasePath(): string {
 // Health / status endpoint
 app.get('/health', (_req, res) => {
   const devices = registry.getAll();
+  const cliAdapters = cliRegistry.getAllAdapters().map(a => ({
+    name: a.config.name,
+    status: a.status,
+    tools: a.tools.length,
+    error: a.lastError,
+  }));
   res.json({
     status: 'ok',
     version: '1.0.0',
@@ -107,6 +121,7 @@ app.get('/health', (_req, res) => {
       tools: d.tools.length,
       connectedAt: d.connectedAt,
     })),
+    cliAdapters,
   });
 });
 
@@ -118,7 +133,10 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
     authorization_endpoint: `${publicUrl}/oauth/authorize`,
     token_endpoint: `${publicUrl}/oauth/token`,
     response_types_supported: ['code'],
+    grant_types_supported: ['authorization_code'],
     code_challenge_methods_supported: ['S256'],
+    token_endpoint_auth_methods_supported: ['client_secret_post'],
+    scopes_supported: ['tools'],
   });
 });
 
@@ -250,8 +268,8 @@ app.get('/oauth/info', (req, res) => {
 
 // ─── OAuth 2.0 Endpoints (for ChatGPT MCP) ───────────────────────────────────────
 
-// CORS headers for OAuth — restrict to known origins when public
-app.use('/oauth', (req, res, next) => {
+// CORS headers — needed for ChatGPT web frontend to reach SSE and /messages
+app.use((req, res, next) => {
   const origin = req.headers.origin;
   if (origin && OAUTH_ALLOWED_ORIGINS.has(origin)) {
     res.header('Access-Control-Allow-Origin', origin);
@@ -290,38 +308,43 @@ app.get('/oauth/authorize', (req, res) => {
     console.warn('[OAuth] Unknown client_id, allowing anyway:', client_id);
   }
 
-  // If OAuth credentials are set, show a login gate
-  if (OAUTH_ENABLED) {
-    const returnUrl = req.url;
-    res.send(`<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Authorize Desktop Commander</title>
-<style>body{font-family:sans-serif;max-width:400px;margin:60px auto;padding:20px}
-input,button{padding:10px;font-size:16px;width:100%;box-sizing:border-box;margin-top:8px}
-button{background:#10a37f;color:#fff;border:none;cursor:pointer}
-button:hover{background:#0d8c6d}</style></head>
-<body>
-<h2>Authorize ChatGPT</h2>
-<p>Sign in to allow ChatGPT to access Desktop Commander tools.</p>
-<form method="POST" action="/oauth/approve">
-<input type="hidden" name="return_url" value="${encodeURIComponent(returnUrl)}">
-<input type="text" name="username" placeholder="Username" required autofocus>
-<input type="password" name="password" placeholder="Password" required>
-<button type="submit">Allow</button>
-</form>
-</body></html>`);
+  // Validate redirect_uri
+  const finalRedirectUri = redirect_uri as string || 'https://chat.openai.com';
+  try {
+    if (!isAllowedRedirectUri(finalRedirectUri)) {
+      console.warn('[OAuth] Rejected invalid redirect_uri host:', new URL(finalRedirectUri).hostname);
+      res.status(400).send('<h1>400 Bad Request</h1><p>Invalid redirect URI.</p>');
+      return;
+    }
+  } catch {
+    console.warn('[OAuth] Invalid redirect_uri:', finalRedirectUri);
+    res.status(400).send('<h1>400 Bad Request</h1><p>Invalid redirect URI.</p>');
     return;
   }
 
-  // Dev/local mode: auto-approve
-  const redirectUrl = new URL(redirect_uri as string || 'https://chat.openai.com');
-  redirectUrl.searchParams.set('code', 'auto_approved');
+  // Generate a unique authorization code
+  const authCode = 'auth_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+
+  // Store code with metadata (simple in-memory; restart clears it)
+  if (!(globalThis as any).oauthCodes) {
+    (globalThis as any).oauthCodes = new Map();
+  }
+  (globalThis as any).oauthCodes.set(authCode, {
+    client_id: client_id as string,
+    redirect_uri: finalRedirectUri,
+    state: state as string,
+    createdAt: Date.now(),
+  });
+
+  // Auto-approve and redirect (login form breaks ChatGPT popup flow)
+  const redirectUrl = new URL(finalRedirectUri);
+  redirectUrl.searchParams.set('code', authCode);
   if (state) redirectUrl.searchParams.set('state', state as string);
 
   res.redirect(redirectUrl.toString());
 });
 
-// OAuth approval POST handler (password gate)
+// OAuth approval POST handler (kept for backwards compatibility; now auto-approves in GET)
 app.post('/oauth/approve', (req, res) => {
   const { username, password, return_url } = req.body;
   if (OAUTH_ENABLED && (username !== OAUTH_USERNAME || password !== OAUTH_PASSWORD)) {
@@ -364,8 +387,19 @@ app.post('/oauth/approve', (req, res) => {
     return;
   }
 
+  const authCode = 'auth_' + Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  if (!(globalThis as any).oauthCodes) {
+    (globalThis as any).oauthCodes = new Map();
+  }
+  (globalThis as any).oauthCodes.set(authCode, {
+    redirect_uri,
+    state,
+    createdAt: Date.now(),
+  });
+
+
   const redirectUrl = new URL(redirect_uri);
-  redirectUrl.searchParams.set('code', 'auto_approved');
+  redirectUrl.searchParams.set('code', authCode);
   if (state) redirectUrl.searchParams.set('state', state);
 
   res.redirect(redirectUrl.toString());
@@ -382,6 +416,30 @@ app.post('/oauth/token', (req, res) => {
   const { grant_type, client_id, client_secret, code, redirect_uri } = req.body;
   console.log(`[OAuth] Token request from ${clientIp}:`, { grant_type, client_id, code });
 
+  // Validate authorization code
+  const oauthCodes = (globalThis as any).oauthCodes;
+  if (!oauthCodes || !oauthCodes.has(code)) {
+    res.status(400).json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' });
+    return;
+  }
+
+  const codeData = oauthCodes.get(code);
+  // Codes expire after 10 minutes
+  if (Date.now() - codeData.createdAt > 10 * 60 * 1000) {
+    oauthCodes.delete(code);
+    res.status(400).json({ error: 'invalid_grant', error_description: 'Authorization code expired' });
+    return;
+  }
+
+  // Validate redirect_uri matches what was used in authorize
+  if (redirect_uri && redirect_uri !== codeData.redirect_uri) {
+    res.status(400).json({ error: 'invalid_grant', error_description: 'redirect_uri mismatch' });
+    return;
+  }
+
+  // Mark code as used (single-use)
+  oauthCodes.delete(code);
+
   // Validate client credentials (be permissive for now)
   const validClient = auth.validateOAuthClient(client_id, client_secret);
   if (!validClient) {
@@ -389,11 +447,11 @@ app.post('/oauth/token', (req, res) => {
     const keys = auth.listKeys();
     keys.then(apiKeys => {
       if (apiKeys.length > 0) {
-        // Accept any valid client for now
         res.json({
           access_token: apiKeys[0].key,
-          token_type: 'bearer',
+          token_type: 'Bearer',
           expires_in: 3600,
+          scope: 'tools',
         });
       } else {
         res.status(401).json({ error: 'invalid_client' });
@@ -408,14 +466,14 @@ app.post('/oauth/token', (req, res) => {
   }
 
   // In simple mode: access token is the API key
-  // The code "auto_approved" maps to the default API key
   const accessToken = auth.listKeys().then(keys => keys[0]?.key || 'default');
 
   accessToken.then(token => {
     res.json({
       access_token: token,
-      token_type: 'bearer',
+      token_type: 'Bearer',
       expires_in: 3600,
+      scope: 'tools',
     });
   });
 });
@@ -522,13 +580,20 @@ function buildMcpServer(): McpServer {
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const tools = [...getDirectoryTools(), ...registry.getAllTools(), ...getJobTools()];
-    return {
-      tools: tools.map((t) => ({
+    const cliTools = cliRegistry.getAllTools();
+    const allTools = [
+      ...tools.map((t) => ({
         name: t.name,
         description: describeMcpTool(t.name, t.description),
         inputSchema: decorateMcpInputSchema(t.name, t.inputSchema),
       })),
-    };
+      ...cliTools.map((t) => ({
+        name: t.prefixedName,
+        description: `[${t.originalName}] ${t.description}`,
+        inputSchema: t.inputSchema,
+      })),
+    ];
+    return { tools: allTools };
   });
 
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
@@ -545,9 +610,18 @@ function buildMcpServer(): McpServer {
         const result = await callJobTool(name, (args ?? {}) as Record<string, unknown>, selectedDirectory);
         return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
       }
+      // CLI-prefixed tools route to their own adapter (no cwd sanitization)
+      const cliAdapter = cliRegistry.getAdapterForTool(name);
+      if (cliAdapter) {
+        const result = await cliAdapter.callTool(name, (args ?? {}) as Record<string, unknown>);
+        if (result && typeof result === 'object' && 'content' in (result as object)) {
+          return result as { content: unknown[] };
+        }
+        return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+      }
+      // Device-routed tools: enforce directory policy
       const sanitizedArgs = sanitizeExecutionArgs(name, (args ?? {}) as Record<string, unknown>, selectedDirectory);
       const result = await registry.callTool(name, sanitizedArgs);
-      // result is whatever the device returned (MCP tool result format)
       if (result && typeof result === 'object' && 'content' in (result as object)) {
         return result as { content: unknown[] };
       }
@@ -762,6 +836,26 @@ async function main() {
       });
     });
   }
+
+  // Register CLI MCP adapters (Codex, Claude, Gemini)
+  // Use full paths or CLI_*_PATH env vars since launchd has a restricted PATH
+  if (process.env.CLI_CODEX_ENABLED === 'true') {
+    cliRegistry.register({
+      name: 'codex',
+      command: process.env.CLI_CODEX_PATH || '/opt/homebrew/bin/codex',
+      args: ['mcp-server'],
+      enabled: true,
+    });
+  }
+  if (process.env.CLI_CLAUDE_ENABLED === 'true') {
+    cliRegistry.register({
+      name: 'claude',
+      command: process.env.CLI_CLAUDE_PATH || '/opt/homebrew/bin/claude',
+      args: ['mcp', 'serve'],
+      enabled: true,
+    });
+  }
+  await cliRegistry.startAll();
 
   httpServer.listen(PORT, '0.0.0.0', () => {
     const wsAddr = SINGLE_PORT ? `ws://0.0.0.0:${PORT}` : `ws://0.0.0.0:${WS_PORT}`;
