@@ -6,7 +6,21 @@
 **/*.log
 **/.env
 **/.env.*
+device/run-hidden.vbs
 device-deploy.zip
+
+# Hub-side runtime backups created during deploys
+hub/dist.bak.*/
+hub/src.bak.*/
+device/device.log.old.*
+
+# Local agent/tooling scratch directories
+.claude/
+!.claude/settings.json
+.claude-flow/
+.omc/
+.prd/
+.verifier/
 
 # Python
 **/__pycache__/

@@ -77,7 +77,12 @@ docker compose --profile local up -d   # uses host Tailscale, no sidecar
 powershell -File deploy\register-windows.ps1
 ```
 
-This registers a `DC-Remote-Device` scheduled task that starts the device client at logon.
+This registers two scheduled tasks:
+- `DC-Remote-Device` starts the headless device client at logon.
+- `DC-Remote-Tray` starts a Windows tray controller for status and operator controls.
+
+Right-click the tray icon to start, stop, restart, refresh, or open the device log.
+The device client writes logs to `device\device.log`.
 The device client reads credentials from `device\.env`.
 
 `device\.env`:
@@ -116,6 +121,24 @@ Add to `claude_desktop_config.json`:
   }
 }
 ```
+
+For ChatGPT or another web-hosted MCP client, expose the hub through public HTTPS and set:
+
+```bash
+PUBLIC_URL=https://your-public-host.example
+OAUTH_USERNAME=<login-name>
+OAUTH_PASSWORD=<login-password>
+```
+
+Connect the client to:
+
+```text
+https://your-public-host.example/sse
+```
+
+The device should still connect to the hub over the private WebSocket URL when possible. Public access is only needed for the MCP SSE/OAuth side that the web client calls.
+
+See `docs\public-https.md` for Caddy and Tailscale Funnel examples.
 
 ---
 
@@ -216,6 +239,38 @@ When multiple devices are connected, tools are prefixed with the device ID:
 - `mac-mini_read_file`, `mac-mini_write_file`
 
 With a single device connected, no prefix — tools appear directly.
+
+---
+
+## Managed Remote CLI Jobs
+
+In addition to one-shot Desktop Commander tool calls, the hub exposes managed CLI jobs:
+- `job_start`
+- `job_status`
+- `job_tail`
+- `job_cancel`
+- `job_list`
+
+These allow a client or Ruflo autopilot loop to start long-running CLI work, poll status, tail output, cancel a stuck job, and report progress while the Windows device process remains headless.
+
+See `docs\remote-cli-jobs.md` for details.
+
+## Approved Directory Picker
+
+Remote clients must select or provide an approved working directory before running Desktop Commander command tools or managed jobs.
+
+MCP picker tools:
+- `directory_roots` lists the approved roots.
+- `directory_list` lists child directories under an approved path on the connected device.
+- `directory_select` selects a working directory for the current MCP session.
+- `directory_current` reports the current session selection.
+
+Approved roots:
+- `C:\Users\prest`
+- `C:\dev`
+- `C:\Users\prest\Desktop\SPWR-Daily\Interconnection-Dash-2026\.artifacts`
+
+The hub validates paths before forwarding requests, and the device validates again before calling local Desktop Commander or spawning a managed job.
 
 ---
 
