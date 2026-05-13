@@ -3,6 +3,13 @@ import os from 'os';
 import { randomUUID } from 'crypto';
 import { DesktopCommanderIntegration } from './dc-integration.js';
 import { HubMessage, DeviceMessage } from './types.js';
+import { DeviceJobManager } from './job-manager.js';
+import {
+  getDirectoryRoots,
+  listApprovedChildDirectories,
+  prepareDesktopCommanderArgs,
+  validateDirectoryPath,
+} from './directory-policy.js';
 
 const RECONNECT_DELAY_MS = 5000;
 const HEARTBEAT_INTERVAL_MS = 15000;
@@ -13,6 +20,7 @@ export class DeviceClient {
   private deviceId: string;
   private deviceName: string;
   private dc: DesktopCommanderIntegration;
+  private jobs: DeviceJobManager;
   private ws?: WebSocket;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private isShuttingDown = false;
@@ -24,6 +32,10 @@ export class DeviceClient {
     this.deviceId = process.env.DC_DEVICE_ID || randomUUID();
     this.deviceName = process.env.DC_DEVICE_NAME || os.hostname();
     this.dc = new DesktopCommanderIntegration();
+    this.jobs = new DeviceJobManager();
+    this.jobs.onEvent((event, summary) => {
+      this.ws?.send(JSON.stringify({ type: 'job_event', event, summary } satisfies HubMessage));
+    });
 
     if (!this.apiKey) {
       console.error('❌ DC_HUB_API_KEY environment variable is required');
@@ -94,6 +106,26 @@ export class DeviceClient {
         await this.handleToolCall(msg.callId, msg.toolName, msg.toolArgs, msg.metadata);
         return;
       }
+
+      if (msg.type === 'job_start') {
+        this.handleJobStart(msg.callId, msg.jobArgs);
+        return;
+      }
+
+      if (msg.type === 'job_status') {
+        this.handleJobStatus(msg.callId, msg.jobId);
+        return;
+      }
+
+      if (msg.type === 'job_tail') {
+        this.handleJobTail(msg.callId, msg.jobId, msg.stream, msg.bytes);
+        return;
+      }
+
+      if (msg.type === 'job_cancel') {
+        this.handleJobCancel(msg.callId, msg.jobId);
+        return;
+      }
     });
 
     this.ws.on('close', (code, reason) => {
@@ -127,8 +159,20 @@ export class DeviceClient {
       } else if (toolName === 'shutdown') {
         result = { content: [{ type: 'text', text: `Shutdown at ${new Date().toISOString()}` }] };
         setTimeout(() => this.shutdown(), 1000);
+      } else if (toolName === '__directory_roots') {
+        result = { roots: getDirectoryRoots() };
+      } else if (toolName === '__directory_list') {
+        const path = typeof toolArgs.path === 'string' ? toolArgs.path : '';
+        const directory = validateDirectoryPath(path, { mustExist: true });
+        result = {
+          directory,
+          directories: listApprovedChildDirectories(directory.path),
+        };
+      } else if (toolName === '__directory_select') {
+        result = validateDirectoryPath(String(toolArgs.path ?? ''), { mustExist: true });
       } else {
-        result = await this.dc.callTool(toolName, toolArgs, metadata);
+        const sanitizedArgs = prepareDesktopCommanderArgs(toolName, toolArgs);
+        result = await this.dc.callTool(toolName, sanitizedArgs, metadata);
       }
       console.log(`   ✅ [${callId}] done`);
     } catch (err: any) {
@@ -144,6 +188,54 @@ export class DeviceClient {
     };
 
     this.ws?.send(JSON.stringify(response));
+  }
+
+  private handleJobStart(callId: string, jobArgs: Parameters<DeviceJobManager['start']>[0]) {
+    try {
+      const summary = this.jobs.start(jobArgs);
+      console.log(`Job started [${summary.jobId}]: ${summary.command}`);
+      this.ws?.send(JSON.stringify({ type: 'job_started', callId, summary } satisfies HubMessage));
+    } catch (err: any) {
+      this.ws?.send(JSON.stringify({ type: 'job_started', callId, error: err.message } satisfies HubMessage));
+    }
+  }
+
+  private handleJobStatus(callId: string, jobId: string) {
+    const summary = this.jobs.status(jobId);
+    this.ws?.send(JSON.stringify({
+      type: 'job_status_result',
+      callId,
+      summary,
+      error: summary ? undefined : `Unknown job: ${jobId}`,
+    } satisfies HubMessage));
+  }
+
+  private handleJobTail(
+    callId: string,
+    jobId: string,
+    stream?: 'stdout' | 'stderr' | 'both',
+    bytes?: number
+  ) {
+    try {
+      const result = this.jobs.tail(jobId, stream, bytes);
+      const summary = this.jobs.status(jobId);
+      this.ws?.send(JSON.stringify({ type: 'job_result', callId, jobId, summary, result } satisfies HubMessage));
+    } catch (err: any) {
+      this.ws?.send(JSON.stringify({ type: 'job_result', callId, jobId, error: err.message } satisfies HubMessage));
+    }
+  }
+
+  private handleJobCancel(callId: string, jobId: string) {
+    const cancelled = this.jobs.cancel(jobId);
+    const summary = this.jobs.status(jobId);
+    this.ws?.send(JSON.stringify({
+      type: 'job_result',
+      callId,
+      jobId,
+      summary,
+      result: { cancelled },
+      error: summary ? undefined : `Unknown job: ${jobId}`,
+    } satisfies HubMessage));
   }
 
   private startHeartbeat() {
