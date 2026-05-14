@@ -1,4 +1,3 @@
-# Pi hub connection defaults
-PI_HOST = "pk@100.71.124.50"  # pk-jim-2
-
-# Override with:  fab -H pi@100.71.124.50 <task>
+# Hub connection defaults (override via env or -H flag)
+import os
+PI_HOST = os.environ.get("PI_HOST", "pi@<tailscale-ip>")

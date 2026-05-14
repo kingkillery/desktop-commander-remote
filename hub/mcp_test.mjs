@@ -2,7 +2,7 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js';
 
-const HUB_URL = 'http://100.71.124.50:3000/sse';
+const HUB_URL = process.env.HUB_URL || 'http://localhost:3000/sse';
 
 const transport = new SSEClientTransport(new URL(HUB_URL));
 const client = new Client({ name: 'cli-test', version: '1.0.0' }, { capabilities: {} });

@@ -9,8 +9,8 @@
  *   node index.js <hub-url> <api-key>
  *
  * Environment:
- *   DC_HUB_URL      - Hub URL (default: http://100.71.124.50:3000)
- *   DC_HUB_API_KEY - API key (required)
+ *   DC_HUB_URL      - Hub URL (default: http://localhost:3000)
+ *   DC_HUB_API_KEY  - API key (required)
  */
 
 import http from 'http';
@@ -97,7 +97,7 @@ class HubMcpClient {
 }
 
 // Get config from args or env
-const hubUrl = process.argv[2] || process.env.DC_HUB_URL || 'http://100.71.124.50:3000';
+const hubUrl = process.argv[2] || process.env.DC_HUB_URL || 'http://localhost:3000';
 const apiKey = process.argv[3] || process.env.DC_HUB_API_KEY;
 
 if (!apiKey) {

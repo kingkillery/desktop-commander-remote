@@ -19,13 +19,19 @@ function getDesktopCommanderCommand(): { command: string; args: string[] } {
     return { command: 'node', args: [localBuild] };
   }
 
-  // 2. Globally installed CLI
+  // 2. Globally installed CLI (Windows .cmd wrapper)
+  const globalCmd = path.join(process.env.APPDATA || '', 'npm', 'desktop-commander.cmd');
+  if (existsSync(globalCmd)) {
+    return { command: globalCmd, args: [] };
+  }
+
+  // 3. Globally installed CLI (Unix or in PATH)
   try {
     execSync('desktop-commander --version', { stdio: 'ignore' });
     return { command: 'desktop-commander', args: [] };
   } catch {}
 
-  // 3. Fall back to npx (auto-downloads)
+  // 4. Fall back to npx (auto-downloads)
   return { command: 'npx', args: ['-y', '@wonderwhy-er/desktop-commander'] };
 }
 

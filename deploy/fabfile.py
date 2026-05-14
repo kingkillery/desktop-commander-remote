@@ -2,29 +2,30 @@
 """
 Fabric deployment script for Desktop Commander Remote.
 
-HUB — Raspberry Pi / systemd (current):
-  fab -H pk@100.71.124.50 deploy        # First-time hub deploy
-  fab -H pk@100.71.124.50 update        # Update hub code + restart
-  fab -H pk@100.71.124.50 status        # Hub service status
-  fab -H pk@100.71.124.50 logs          # Tail hub logs
-  fab -H pk@100.71.124.50 restart       # Restart hub
-  fab -H pk@100.71.124.50 show-config   # Print API key + connection info
+HUB — Raspberry Pi / systemd:
+  fab -H pi@<tailscale-ip> deploy        # First-time hub deploy
+  fab -H pi@<tailscale-ip> update        # Update hub code + restart
+  fab -H pi@<tailscale-ip> status        # Hub service status
+  fab -H pi@<tailscale-ip> logs          # Tail hub logs
+  fab -H pi@<tailscale-ip> restart       # Restart hub
+  fab -H pi@<tailscale-ip> show-config   # Print API key + connection info
 
-HUB — Cloud / Docker (future: GCP, AWS, Hetzner, etc.):
+HUB — Cloud / Docker (GCP, AWS, Hetzner, etc.):
   fab -H user@cloud-vm deploy-docker    # Build image + start with Tailscale sidecar
   fab -H user@cloud-vm docker-update    # Rebuild image + rolling restart
   fab -H user@cloud-vm docker-logs      # Tail hub + tailscale logs
   fab -H user@cloud-vm docker-status    # Show container status
 
 DEVICE CLIENTS (register each machine with the hub):
-  fab -H k@100.76.176.119 deploy-device   # Mac (jims-mac-mini) - launchd
-  fab -H pk@100.71.124.50 deploy-device   # Pi itself (optional)
-  setup-windows                           # Windows MSI (local, no -H needed)
+  fab -H user@mac-host deploy-device      # Mac - launchd
+  fab -H pi@<tailscale-ip> deploy-device  # Pi itself (optional)
+  setup-windows                           # Windows (local, no -H needed)
 
 Prerequisites:
   pip install fabric
+  Set env vars: HUB_API_KEY, HUB_WS_URL, SSH_KEY (optional)
   Mac: run once on Mac to authorize key:
-    echo '<pub key from ~/.ssh/jims-mac-mini.pub>' >> ~/.ssh/authorized_keys
+    echo '<your-pub-key>' >> ~/.ssh/authorized_keys
   Cloud: set TS_AUTHKEY in hub/.env before deploy-docker
 """
 
@@ -39,11 +40,11 @@ if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 # -- Config -------------------------------------------------------------------
-SSH_KEY = os.path.expanduser("~/.ssh/pk-jim-2")
+SSH_KEY = os.environ.get("SSH_KEY", os.path.expanduser("~/.ssh/id_ed25519"))
 REMOTE_DIR = "/opt/dc-remote-hub"
 DEVICE_DIR = "/opt/dc-remote-device"     # Linux remote device dir
-HUB_WS_URL = "ws://100.71.124.50:3001"
-HUB_API_KEY = "bb5dfda7-06a3-4695-b2c1-1bfc053a9b8b"
+HUB_WS_URL = os.environ.get("HUB_WS_URL", "ws://localhost:3001")
+HUB_API_KEY = os.environ.get("HUB_API_KEY", "")
 SERVICE_NAME = "dc-remote-hub"
 NODE_VERSION = "20"  # minimum LTS
 HUB_PORT = 3000
@@ -292,7 +293,7 @@ def _push_device_code(c, remote_dir: str):
 def deploy_device(c):
     """Deploy device client to a remote host (Mac or Linux) and register with hub.
 
-    Mac:   fab -H k@100.76.176.119 deploy-device
+    Mac:   fab -H user@mac-host deploy-device
     Linux: fab -H user@host deploy-device
     """
     uname = c.run("uname -s", hide=True).stdout.strip()
