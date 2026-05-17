@@ -14,7 +14,7 @@ import { HubJobRegistry } from './job-registry.js';
 import { AuthManager } from './auth.js';
 import { HubMessage, JobStartArgs } from './types.js';
 import { CliMcpRegistry } from './cli-mcp-adapter.js';
-import { isAllowedRedirectUri, OAUTH_ALLOWED_ORIGINS } from './oauth.js';
+import { getOAuthAccessTokenTtlSeconds, isAllowedRedirectUri, OAUTH_ALLOWED_ORIGINS } from './oauth.js';
 import { getJobTools, validateJobStartArgs } from './job-tools.js';
 import { getDirectoryTools, isDirectoryTool } from './directory-tools.js';
 import {
@@ -61,6 +61,7 @@ function getClientIp(req: express.Request): string {
 const OAUTH_USERNAME = process.env.OAUTH_USERNAME;
 const OAUTH_PASSWORD = process.env.OAUTH_PASSWORD;
 const OAUTH_ENABLED = !!(OAUTH_USERNAME && OAUTH_PASSWORD);
+const OAUTH_ACCESS_TOKEN_TTL_SECONDS = getOAuthAccessTokenTtlSeconds();
 const PUBLIC_BASE_PATH = getPublicBasePath();
 
 // ─── Express (MCP over SSE) ───────────────────────────────────────────────────
@@ -135,7 +136,7 @@ app.get('/.well-known/oauth-authorization-server', (req, res) => {
     response_types_supported: ['code'],
     grant_types_supported: ['authorization_code'],
     code_challenge_methods_supported: ['S256'],
-    token_endpoint_auth_methods_supported: ['client_secret_post'],
+    token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
     scopes_supported: ['tools'],
   });
 });
@@ -450,7 +451,7 @@ app.post('/oauth/token', (req, res) => {
         res.json({
           access_token: apiKeys[0].key,
           token_type: 'Bearer',
-          expires_in: 3600,
+          expires_in: OAUTH_ACCESS_TOKEN_TTL_SECONDS,
           scope: 'tools',
         });
       } else {
@@ -472,7 +473,7 @@ app.post('/oauth/token', (req, res) => {
     res.json({
       access_token: token,
       token_type: 'Bearer',
-      expires_in: 3600,
+      expires_in: OAUTH_ACCESS_TOKEN_TTL_SECONDS,
       scope: 'tools',
     });
   });

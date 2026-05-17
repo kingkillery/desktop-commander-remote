@@ -128,6 +128,7 @@ For ChatGPT or another web-hosted MCP client, expose the hub through public HTTP
 PUBLIC_URL=https://your-public-host.example
 OAUTH_USERNAME=<login-name>
 OAUTH_PASSWORD=<login-password>
+OAUTH_ACCESS_TOKEN_TTL_SECONDS=2592000  # 30 days; increase for fewer re-auth prompts
 ```
 
 Connect the client to:
