@@ -73,6 +73,14 @@ function Get-HomeDir {
     return 'C:\dev'
 }
 
+function Restart-DeviceTask {
+    Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 1
+    Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    Start-Sleep -Milliseconds 500
+    Refresh-Tray
+}
+
 function Get-TaskState([string]$name) {
     $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
     if (-not $task) {
@@ -294,13 +302,36 @@ $stopItem.Add_Click({
 $restartItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $restartItem.Text = 'Restart device'
 $restartItem.Add_Click({
-    Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 1
-    Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-    Start-Sleep -Milliseconds 500
-    Refresh-Tray
+    Restart-DeviceTask
 })
 [void]$contextMenu.Items.Add($restartItem)
+
+$setHubUrlItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$setHubUrlItem.Text = 'Set Hub URL...'
+$setHubUrlItem.Add_Click({
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    $current = Get-EnvValue 'DC_HUB_URL'
+    if (-not $current) { $current = 'ws://localhost:3000' }
+    $newUrl = [Microsoft.VisualBasic.Interaction]::InputBox('Enter the Hub WebSocket URL:', 'Set Hub URL', $current)
+    if ($newUrl -and $newUrl.Trim()) {
+        Set-EnvValue 'DC_HUB_URL' $newUrl.Trim()
+        Restart-DeviceTask
+    }
+})
+[void]$contextMenu.Items.Add($setHubUrlItem)
+
+$setApiKeyItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$setApiKeyItem.Text = 'Set Hub API Key...'
+$setApiKeyItem.Add_Click({
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    $current = Get-EnvValue 'DC_HUB_API_KEY'
+    $newKey = [Microsoft.VisualBasic.Interaction]::InputBox('Enter your Hub API Key:', 'Set Hub API Key', $current)
+    if ($newKey -and $newKey.Trim()) {
+        Set-EnvValue 'DC_HUB_API_KEY' $newKey.Trim()
+        Restart-DeviceTask
+    }
+})
+[void]$contextMenu.Items.Add($setApiKeyItem)
 
 $setHomeDirItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $setHomeDirItem.Text = 'Set home directory...'
@@ -321,9 +352,7 @@ $setHomeDirItem.Add_Click({
         Set-EnvValue 'DC_HOME_DIR' $newDir
         $restart = [System.Windows.Forms.MessageBox]::Show("Home directory updated to:`n$newDir`n`nRestart device now to apply?", "Restart Device?", [System.Windows.Forms.MessageBoxButtons]::YesNo, [System.Windows.Forms.MessageBoxIcon]::Question)
         if ($restart -eq [System.Windows.Forms.DialogResult]::Yes) {
-            Stop-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 1
-            Start-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+            Restart-DeviceTask
         }
         Refresh-Tray
     }

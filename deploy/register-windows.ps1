@@ -13,6 +13,79 @@ if (Test-Path (Join-Path $pkDcDir 'device')) {
     $hubDir = Join-Path $nodeModulesDir 'pk-desktop-commander-hub'
 }
 
+$envPath = Join-Path $wdir '.env'
+
+function Set-EnvValue([string]$key, [string]$value) {
+    $lines = @()
+    $found = $false
+    if (Test-Path -LiteralPath $envPath) {
+        $lines = Get-Content -LiteralPath $envPath
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match "^\s*$key\s*=") {
+                $lines[$i] = "$key=$value"
+                $found = $true
+            }
+        }
+    }
+    if (-not $found) {
+        $lines += "$key=$value"
+    }
+    $lines | Set-Content -LiteralPath $envPath -Encoding UTF8
+}
+
+function Get-EnvValue([string]$key) {
+    if (-not (Test-Path -LiteralPath $envPath)) { return $null }
+    $line = Get-Content -LiteralPath $envPath | Where-Object { $_ -match "^\s*$key\s*=" } | Select-Object -First 1
+    if ($line) {
+        return ($line -split '=', 2)[1].Trim()
+    }
+    return $null
+}
+
+if (-not (Test-Path -LiteralPath $envPath)) {
+    $parentDir = Split-Path -Parent $envPath
+    if (-not (Test-Path -LiteralPath $parentDir)) {
+        New-Item -ItemType Directory -Path $parentDir -Force | Out-Null
+    }
+    New-Item -ItemType File -Path $envPath -Force | Out-Null
+}
+
+$currentHubUrl = Get-EnvValue 'DC_HUB_URL'
+if (-not $currentHubUrl) {
+    $hubUrl = 'ws://localhost:3000'
+    try {
+        if ([Environment]::UserInteractive) {
+            $inputUrl = Read-Host "Enter Hub WebSocket URL [default: ws://localhost:3000]"
+            if ($inputUrl) { $hubUrl = $inputUrl.Trim() }
+        }
+    } catch {}
+    Set-EnvValue 'DC_HUB_URL' $hubUrl
+}
+
+$currentApiKey = Get-EnvValue 'DC_HUB_API_KEY'
+if (-not $currentApiKey) {
+    $apiKey = 'placeholder-api-key'
+    try {
+        if ([Environment]::UserInteractive) {
+            $inputKey = Read-Host "Enter Hub API Key (Required for device to connect to hub)"
+            if ($inputKey) { $apiKey = $inputKey.Trim() }
+        }
+    } catch {}
+    Set-EnvValue 'DC_HUB_API_KEY' $apiKey
+}
+
+$currentDeviceName = Get-EnvValue 'DC_DEVICE_NAME'
+if (-not $currentDeviceName) {
+    $devName = $env:COMPUTERNAME
+    try {
+        if ([Environment]::UserInteractive) {
+            $inputName = Read-Host "Enter Device Display Name [default: $env:COMPUTERNAME]"
+            if ($inputName) { $devName = $inputName.Trim() }
+        }
+    } catch {}
+    Set-EnvValue 'DC_DEVICE_NAME' $devName
+}
+
 $node   = 'C:\Program Files\nodejs\node.exe'
 $script = Join-Path $wdir 'dist\index.js'
 $hubScript = Join-Path $hubDir 'dist\index.js'
