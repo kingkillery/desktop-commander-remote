@@ -1,7 +1,22 @@
 #!/usr/bin/env node
+// Load .env if present
+import { readFileSync } from 'fs';
+import { resolve, dirname } from 'path';
+import { fileURLToPath, pathToFileURL } from 'url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+try {
+  const env = readFileSync(resolve(__dirname, '../.env'), 'utf8');
+  for (const line of env.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const [key, ...rest] = trimmed.split('=');
+    if (key && !(key in process.env)) process.env[key] = rest.join('=');
+  }
+} catch {}
+
 import express from 'express';
 import { createServer } from 'http';
-import { pathToFileURL } from 'url';
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server as McpServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';

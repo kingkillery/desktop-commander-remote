@@ -1,13 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
+
+// Set test environment variable before importing directory-policy
+process.env.APPROVED_DIRECTORIES = 'user_profile:User profile:C:\\Users\\prest,dev:Development:C:\\dev,spwr_artifacts:SPWR artifacts:C:\\Users\\prest\\Desktop\\SPWR-Daily\\Interconnection-Dash-2026\\.artifacts';
+
+const {
   getDefaultApprovedDirectory,
   getDirectoryRoots,
   prepareDesktopCommanderArgs,
   requireApprovedCwd,
   sanitizeExecutionArgs,
   validateDirectoryPath,
-} from './directory-policy.js';
+} = await import('./directory-policy.js');
+
 
 test('directory roots expose only approved Windows roots', () => {
   const roots = getDirectoryRoots();

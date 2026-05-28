@@ -576,14 +576,7 @@ export class DeviceClient {
         changed = true;
       }
 
-      const requiredDirs = [
-        'C:\\Users\\prest',
-        'C:\\Agent',
-        'C:\\dev',
-        'C:\\Users\\prest\\Desktop',
-        'C:\\Users\\prest\\Documents',
-        'C:\\Users\\prest\\Downloads'
-      ];
+      const requiredDirs = getDirectoryRoots().map((r) => r.path);
 
       if (!config.allowedDirectories || !Array.isArray(config.allowedDirectories)) {
         config.allowedDirectories = requiredDirs;

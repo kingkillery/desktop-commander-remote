@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
 export interface ApprovedDirectoryRoot {
   id: string;
@@ -14,15 +15,68 @@ export interface ApprovedDirectory {
   rootLabel: string;
 }
 
-export const APPROVED_DIRECTORY_ROOTS: ApprovedDirectoryRoot[] = [
-  { id: 'user_profile', label: 'User profile', path: 'C:\\Users\\prest' },
-  { id: 'dev', label: 'Development', path: 'C:\\dev' },
-  {
-    id: 'spwr_artifacts',
-    label: 'SPWR artifacts',
-    path: 'C:\\Users\\prest\\Desktop\\SPWR-Daily\\Interconnection-Dash-2026\\.artifacts',
-  },
-];
+function getApprovedDirectoryRoots(): ApprovedDirectoryRoot[] {
+  const roots: ApprovedDirectoryRoot[] = [];
+
+  // 1. Check for custom allowed directories from environment variable
+  const envAllowed = process.env.APPROVED_DIRECTORIES;
+  if (envAllowed) {
+    const parts = envAllowed.split(',');
+    parts.forEach((part, idx) => {
+      const trimmed = part.trim();
+      if (!trimmed) return;
+
+      // Format can be "id:label:path" or just "path"
+      // Since Windows paths contain colons (e.g. C:\dev), we check if there are at least 2 colons
+      // for the "id:label:drive:\path" format.
+      const colonCount = (trimmed.match(/:/g) || []).length;
+      if (colonCount >= 2 && !/^[a-zA-Z]:/.test(trimmed)) {
+        const firstColon = trimmed.indexOf(':');
+        const secondColon = trimmed.indexOf(':', firstColon + 1);
+        if (firstColon !== -1 && secondColon !== -1) {
+          const id = trimmed.slice(0, firstColon).trim();
+          const label = trimmed.slice(firstColon + 1, secondColon).trim();
+          const pathVal = trimmed.slice(secondColon + 1).trim();
+          roots.push({ id, label, path: pathVal });
+          return;
+        }
+      }
+
+      roots.push({
+        id: `env_dir_${idx}`,
+        label: `Allowed Directory ${idx + 1}`,
+        path: trimmed,
+      });
+    });
+  }
+
+  // 2. Fall back to safe dynamic defaults if none specified
+  if (roots.length === 0) {
+    const homeDir = os.homedir();
+    roots.push({ id: 'user_profile', label: 'User profile', path: homeDir });
+    roots.push({ id: 'dev', label: 'Development', path: 'C:\\dev' });
+
+    // Add common subdirectories if they exist
+    const desktop = path.win32.join(homeDir, 'Desktop');
+    if (fs.existsSync(desktop)) {
+      roots.push({ id: 'desktop', label: 'Desktop', path: desktop });
+    }
+  }
+
+  return roots;
+}
+
+export const APPROVED_DIRECTORY_ROOTS: ApprovedDirectoryRoot[] = [];
+
+export function refreshApprovedDirectoryRoots(): ApprovedDirectoryRoot[] {
+  const current = getApprovedDirectoryRoots();
+  APPROVED_DIRECTORY_ROOTS.length = 0;
+  APPROVED_DIRECTORY_ROOTS.push(...current);
+  return APPROVED_DIRECTORY_ROOTS;
+}
+
+// Initial population
+refreshApprovedDirectoryRoots();
 
 const DEFAULT_APPROVED_DIRECTORY_FALLBACK = 'C:\\Users\\prest\\.mcporter';
 
@@ -75,6 +129,7 @@ const PATH_ARG_NAMES = new Set([
 const COMMAND_TOOL_NAMES = new Set(['execute_command', 'start_process']);
 
 export function getDirectoryRoots(): ApprovedDirectory[] {
+  refreshApprovedDirectoryRoots();
   return APPROVED_DIRECTORY_ROOTS.map((root) => ({
     name: root.label,
     path: canonicalizeWindowsPath(root.path),
@@ -253,6 +308,7 @@ function isAbsoluteWindowsPath(input: string): boolean {
 }
 
 function findContainingRoot(canonicalPath: string): ApprovedDirectoryRoot | undefined {
+  refreshApprovedDirectoryRoots();
   const pathKey = canonicalPath.toLowerCase();
   return APPROVED_DIRECTORY_ROOTS
     .map((root) => ({ ...root, path: canonicalizeRoot(root.path) }))

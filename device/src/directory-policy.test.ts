@@ -1,13 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
+
+// Set test environment variable before importing directory-policy
+process.env.APPROVED_DIRECTORIES = 'user_profile:User profile:C:\\Users\\prest,agent_workspace:Agent Workspace:C:\\Agent,dev:Development:C:\\dev,dev_projects:Development Projects:C:\\dev\\Desktop-Projects,desktop:Desktop:C:\\Users\\prest\\Desktop,spwr_dash:SPWR Interconnection Dash:C:\\Users\\prest\\Desktop\\SPWR-Daily\\Interconnection-Dash-2026,documents:Documents:C:\\Users\\prest\\Documents,downloads:Downloads:C:\\Users\\prest\\Downloads';
+
+const {
   getDirectoryRoots,
   listApprovedChildDirectories,
   prepareDesktopCommanderArgs,
   requireApprovedCwd,
   sanitizeExecutionArgs,
   validateDirectoryPath,
-} from './directory-policy.js';
+} = await import('./directory-policy.js');
 
 test('device directory policy accepts only approved roots', () => {
   assert.deepEqual(getDirectoryRoots().map((root) => root.path), [
@@ -101,4 +105,32 @@ test('device directory policy prepares Desktop Commander command args without le
     { command: "cd 'C:\\dev' && pwd", shell: 'bash' }
   );
   assert.throws(() => prepareDesktopCommanderArgs('start_process', { timeout_ms: 1000 }, 'C:\\dev'), /Command tools require/);
+});
+
+test('device directory policy resolves common Windows executables for PowerShell commands', () => {
+  const originalPath = process.env.PATH;
+  const originalPathExt = process.env.PATHEXT;
+  const originalWindir = process.env.WINDIR;
+  process.env.PATH = 'C:\\Python314;C:\\Windows\\System32\\WindowsPowerShell\\v1.0;C:\\Windows\\System32';
+  process.env.PATHEXT = '.EXE;.CMD';
+  process.env.WINDIR = 'C:\\Windows';
+
+  try {
+    assert.deepEqual(
+      prepareDesktopCommanderArgs('start_process', { command: 'python --version', cwd: 'C:\\dev' }),
+      { command: "Set-Location -LiteralPath 'C:\\dev'; & 'C:\\Python314\\python.EXE' --version" }
+    );
+    assert.deepEqual(
+      prepareDesktopCommanderArgs('start_process', { command: 'py --version', cwd: 'C:\\dev' }),
+      { command: "Set-Location -LiteralPath 'C:\\dev'; & 'C:\\Windows\\py.exe' --version" }
+    );
+    assert.deepEqual(
+      prepareDesktopCommanderArgs('start_process', { command: 'powershell -NoProfile -Command \"$PSVersionTable.PSVersion\"', cwd: 'C:\\dev' }),
+      { command: "Set-Location -LiteralPath 'C:\\dev'; & 'C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.EXE' -NoProfile -Command \"$PSVersionTable.PSVersion\"" }
+    );
+  } finally {
+    process.env.PATH = originalPath;
+    process.env.PATHEXT = originalPathExt;
+    process.env.WINDIR = originalWindir;
+  }
 });

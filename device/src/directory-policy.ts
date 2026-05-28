@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
 export interface ApprovedDirectoryRoot {
   id: string;
@@ -15,26 +16,83 @@ export interface ApprovedDirectory {
 }
 
 function getApprovedDirectoryRoots(): ApprovedDirectoryRoot[] {
-  const roots: ApprovedDirectoryRoot[] = [
-    { id: 'user_profile', label: 'User profile', path: 'C:\\Users\\prest' },
-    { id: 'agent_workspace', label: 'Agent Workspace', path: 'C:\\Agent' },
-    { id: 'dev', label: 'Development', path: 'C:\\dev' },
-    { id: 'dev_projects', label: 'Development Projects', path: 'C:\\dev\\Desktop-Projects' },
-    { id: 'desktop', label: 'Desktop', path: 'C:\\Users\\prest\\Desktop' },
-    { id: 'spwr_dash', label: 'SPWR Interconnection Dash', path: 'C:\\Users\\prest\\Desktop\\SPWR-Daily\\Interconnection-Dash-2026' },
-    { id: 'documents', label: 'Documents', path: 'C:\\Users\\prest\\Documents' },
-    { id: 'downloads', label: 'Downloads', path: 'C:\\Users\\prest\\Downloads' },
-  ];
+  const roots: ApprovedDirectoryRoot[] = [];
 
-  const homeDir = process.env.DC_HOME_DIR?.trim();
-  if (homeDir) {
-    roots.unshift({ id: 'home_dir', label: 'Home directory', path: homeDir });
+  // 1. Check for custom allowed directories from environment variable
+  const envAllowed = process.env.APPROVED_DIRECTORIES;
+  if (envAllowed) {
+    const parts = envAllowed.split(',');
+    parts.forEach((part, idx) => {
+      const trimmed = part.trim();
+      if (!trimmed) return;
+
+      // Format can be "id:label:path" or just "path"
+      // Since Windows paths contain colons (e.g. C:\dev), we check if there are at least 2 colons
+      // for the "id:label:drive:\path" format.
+      const colonCount = (trimmed.match(/:/g) || []).length;
+      if (colonCount >= 2 && !/^[a-zA-Z]:/.test(trimmed)) {
+        const firstColon = trimmed.indexOf(':');
+        const secondColon = trimmed.indexOf(':', firstColon + 1);
+        if (firstColon !== -1 && secondColon !== -1) {
+          const id = trimmed.slice(0, firstColon).trim();
+          const label = trimmed.slice(firstColon + 1, secondColon).trim();
+          const pathVal = trimmed.slice(secondColon + 1).trim();
+          roots.push({ id, label, path: pathVal });
+          return;
+        }
+      }
+
+      roots.push({
+        id: `env_dir_${idx}`,
+        label: `Allowed Directory ${idx + 1}`,
+        path: trimmed,
+      });
+    });
+  }
+
+  // 2. Fall back to safe dynamic defaults if none specified
+  if (roots.length === 0) {
+    const homeDir = os.homedir();
+    roots.push({ id: 'user_profile', label: 'User profile', path: homeDir });
+    roots.push({ id: 'agent_workspace', label: 'Agent Workspace', path: 'C:\\Agent' });
+    roots.push({ id: 'dev', label: 'Development', path: 'C:\\dev' });
+
+    // Add common subdirectories if they exist
+    const desktop = path.win32.join(homeDir, 'Desktop');
+    if (fs.existsSync(desktop)) {
+      roots.push({ id: 'desktop', label: 'Desktop', path: desktop });
+    }
+    const documents = path.win32.join(homeDir, 'Documents');
+    if (fs.existsSync(documents)) {
+      roots.push({ id: 'documents', label: 'Documents', path: documents });
+    }
+    const downloads = path.win32.join(homeDir, 'Downloads');
+    if (fs.existsSync(downloads)) {
+      roots.push({ id: 'downloads', label: 'Downloads', path: downloads });
+    }
+  }
+
+  const homeDirEnv = process.env.DC_HOME_DIR?.trim();
+  if (homeDirEnv) {
+    if (!roots.some((r) => r.path.toLowerCase() === homeDirEnv.toLowerCase())) {
+      roots.unshift({ id: 'home_dir', label: 'Home directory', path: homeDirEnv });
+    }
   }
 
   return roots;
 }
 
-export const APPROVED_DIRECTORY_ROOTS: ApprovedDirectoryRoot[] = getApprovedDirectoryRoots();
+export const APPROVED_DIRECTORY_ROOTS: ApprovedDirectoryRoot[] = [];
+
+export function refreshApprovedDirectoryRoots(): ApprovedDirectoryRoot[] {
+  const current = getApprovedDirectoryRoots();
+  APPROVED_DIRECTORY_ROOTS.length = 0;
+  APPROVED_DIRECTORY_ROOTS.push(...current);
+  return APPROVED_DIRECTORY_ROOTS;
+}
+
+// Initial population
+refreshApprovedDirectoryRoots();
 
 const PATH_ARG_NAMES = new Set([
   'path',
@@ -72,6 +130,7 @@ const PATH_ARG_NAMES = new Set([
 const COMMAND_TOOL_NAMES = new Set(['execute_command', 'start_process']);
 
 export function getDirectoryRoots(): ApprovedDirectory[] {
+  refreshApprovedDirectoryRoots();
   return APPROVED_DIRECTORY_ROOTS.map((root) => ({
     name: root.label,
     path: canonicalizeWindowsPath(root.path),
@@ -250,6 +309,7 @@ function isAbsoluteWindowsPath(input: string): boolean {
 }
 
 function findContainingRoot(canonicalPath: string): ApprovedDirectoryRoot | undefined {
+  refreshApprovedDirectoryRoots();
   const pathKey = canonicalPath.toLowerCase();
   return APPROVED_DIRECTORY_ROOTS
     .map((root) => ({ ...root, path: canonicalizeRoot(root.path) }))
@@ -271,7 +331,7 @@ function uppercaseDriveLetter(input: string): string {
 function withWorkingDirectory(command: string, cwd: string, shell?: string): string {
   const shellKey = (shell ?? 'powershell').toLowerCase();
   if (shellKey.includes('powershell') || shellKey.includes('pwsh')) {
-    return `Set-Location -LiteralPath '${cwd.replace(/'/g, "''")}'; ${command}`;
+    return `Set-Location -LiteralPath '${cwd.replace(/'/g, "''")}'; ${resolvePowerShellExecutable(command)}`;
   }
   if (shellKey === 'cmd' || shellKey.endsWith('\\cmd.exe') || shellKey.endsWith('/cmd.exe')) {
     return `cd /d "${cwd.replace(/"/g, '""')}" && ${command}`;
@@ -279,7 +339,85 @@ function withWorkingDirectory(command: string, cwd: string, shell?: string): str
   if (shellKey.includes('bash') || shellKey.endsWith('/sh') || shellKey.endsWith('\\sh.exe')) {
     return `cd '${cwd.replace(/'/g, `'\\''`)}' && ${command}`;
   }
-  return `Set-Location -LiteralPath '${cwd.replace(/'/g, "''")}'; ${command}`;
+  return `Set-Location -LiteralPath '${cwd.replace(/'/g, "''")}'; ${resolvePowerShellExecutable(command)}`;
+}
+
+function resolvePowerShellExecutable(command: string): string {
+  const match = command.match(/^(\s*&\s*)?(?:"([^"]+)"|'([^']+)'|([A-Za-z][\w.-]*))(.*)$/s);
+  if (!match) return command;
+
+  const executable = match[2] ?? match[3] ?? match[4];
+  const rest = match[5] ?? '';
+  if (!executable || executable.includes('\\') || executable.includes('/')) {
+    return command;
+  }
+  if (!shouldResolveWindowsExecutable(executable)) {
+    return command;
+  }
+
+  const resolved = resolveExecutableOnPath(executable);
+  if (!resolved) return command;
+
+  return `& '${resolved.replace(/'/g, "''")}'${rest}`;
+}
+
+function shouldResolveWindowsExecutable(executable: string): boolean {
+  const normalized = executable.toLowerCase().replace(/\.exe$/, '');
+  return normalized === 'python'
+    || normalized === 'python3'
+    || normalized === 'py'
+    || normalized === 'powershell'
+    || normalized === 'pwsh'
+    || normalized === 'cmd';
+}
+
+function resolveExecutableOnPath(executable: string): string | undefined {
+  const pathEnv = process.env.PATH ?? process.env.Path ?? process.env.path ?? '';
+  const pathExt = (process.env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD')
+    .split(';')
+    .filter(Boolean);
+  const names = path.extname(executable)
+    ? [executable]
+    : [executable, ...pathExt.map((ext) => `${executable}${ext}`)];
+
+  for (const dir of pathEnv.split(path.delimiter)) {
+    const trimmed = dir.trim();
+    if (!trimmed) continue;
+    for (const name of names) {
+      const candidate = path.win32.join(trimmed, name);
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  }
+
+  for (const candidate of getKnownWindowsExecutables(executable)) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+
+  return undefined;
+}
+
+function getKnownWindowsExecutables(executable: string): string[] {
+  const normalized = executable.toLowerCase().replace(/\.exe$/, '');
+  const windir = process.env.WINDIR ?? 'C:\\Windows';
+  if (normalized === 'powershell') {
+    return [path.win32.join(windir, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')];
+  }
+  if (normalized === 'cmd') {
+    return [path.win32.join(windir, 'System32', 'cmd.exe')];
+  }
+  if (normalized === 'py') {
+    return [path.win32.join(windir, 'py.exe')];
+  }
+  if (normalized === 'python' || normalized === 'python3') {
+    return [
+      'C:\\Python314\\python.exe',
+      'C:\\Python313\\python.exe',
+      'C:\\Python312\\python.exe',
+      'C:\\Python311\\python.exe',
+      'C:\\Python310\\python.exe',
+    ];
+  }
+  return [];
 }
 
 function unprefixToolName(toolName: string): string {
