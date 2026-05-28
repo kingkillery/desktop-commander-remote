@@ -13,26 +13,32 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 function getDesktopCommanderCommand(): { command: string; args: string[] } {
-  // 1. Local dev build (sibling repo checkout)
+  // 1. Local node_modules dependency (pk-desktop-commander)
+  const localDep = path.resolve(__dirname, '../node_modules/pk-desktop-commander/dist/index.js');
+  if (existsSync(localDep)) {
+    return { command: 'node', args: [localDep] };
+  }
+
+  // 2. Local dev build (sibling repo checkout)
   const localBuild = path.resolve(__dirname, '../../../DesktopCommanderMCP/dist/index.js');
   if (existsSync(localBuild)) {
     return { command: 'node', args: [localBuild] };
   }
 
-  // 2. Globally installed CLI (Windows .cmd wrapper)
+  // 3. Globally installed CLI (Windows .cmd wrapper)
   const globalCmd = path.join(process.env.APPDATA || '', 'npm', 'desktop-commander.cmd');
   if (existsSync(globalCmd)) {
     return { command: globalCmd, args: [] };
   }
 
-  // 3. Globally installed CLI (Unix or in PATH)
+  // 4. Globally installed CLI (Unix or in PATH)
   try {
     execSync('desktop-commander --version', { stdio: 'ignore' });
     return { command: 'desktop-commander', args: [] };
   } catch {}
 
-  // 4. Fall back to npx (auto-downloads)
-  return { command: 'npx', args: ['-y', '@wonderwhy-er/desktop-commander'] };
+  // 5. Fall back to npx (auto-downloads)
+  return { command: 'npx', args: ['-y', 'pk-desktop-commander'] };
 }
 
 export class DesktopCommanderIntegration {

@@ -16,6 +16,7 @@ export interface ApprovedDirectory {
 
 function getApprovedDirectoryRoots(): ApprovedDirectoryRoot[] {
   const roots: ApprovedDirectoryRoot[] = [
+    { id: 'user_profile', label: 'User profile', path: 'C:\\Users\\prest' },
     { id: 'agent_workspace', label: 'Agent Workspace', path: 'C:\\Agent' },
     { id: 'dev', label: 'Development', path: 'C:\\dev' },
     { id: 'dev_projects', label: 'Development Projects', path: 'C:\\dev\\Desktop-Projects' },

@@ -1,11 +1,22 @@
-# Register DC-Remote-Device as a scheduled task that starts at login
+$deployDir = $PSScriptRoot
+$pkDcDir = Split-Path -Parent $deployDir
+$nodeModulesDir = Split-Path -Parent $pkDcDir
+
+# Check if we are running in the development workspace or from npm installation
+if (Test-Path (Join-Path $pkDcDir 'device')) {
+    $rootDir = $pkDcDir
+    $wdir = Join-Path $rootDir 'device'
+    $hubDir = Join-Path $rootDir 'hub'
+} else {
+    $rootDir = $pkDcDir
+    $wdir = Join-Path $nodeModulesDir 'pk-desktop-commander-device'
+    $hubDir = Join-Path $nodeModulesDir 'pk-desktop-commander-hub'
+}
+
 $node   = 'C:\Program Files\nodejs\node.exe'
-$script = 'C:\dev\Desktop-Projects\Desktop-Commander-Remote\device\dist\index.js'
-$hubScript = 'C:\dev\Desktop-Projects\Desktop-Commander-Remote\hub\dist\index.js'
-$wdir   = 'C:\dev\Desktop-Projects\Desktop-Commander-Remote\device'
-$hubDir = 'C:\dev\Desktop-Projects\Desktop-Commander-Remote\hub'
-$rootDir = 'C:\dev\Desktop-Projects\Desktop-Commander-Remote'
-$tray   = 'C:\dev\Desktop-Projects\Desktop-Commander-Remote\deploy\tray-controller.ps1'
+$script = Join-Path $wdir 'dist\index.js'
+$hubScript = Join-Path $hubDir 'dist\index.js'
+$tray   = Join-Path $deployDir 'tray-controller.ps1'
 $runner = Join-Path $wdir 'run-hidden.vbs'
 $hubRunner = Join-Path $hubDir 'run-hidden.vbs'
 $cloudflaredRunner = Join-Path $rootDir 'cloudflared-run-hidden.vbs'

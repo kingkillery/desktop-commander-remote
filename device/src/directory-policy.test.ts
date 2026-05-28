@@ -11,6 +11,7 @@ import {
 
 test('device directory policy accepts only approved roots', () => {
   assert.deepEqual(getDirectoryRoots().map((root) => root.path), [
+    'C:\\Users\\prest',
     'C:\\Agent',
     'C:\\dev',
     'C:\\dev\\Desktop-Projects',

@@ -1,5 +1,5 @@
 {
-  "name": "dc-remote-hub",
+  "name": "pk-desktop-commander-hub",
   "version": "1.0.0",
   "description": "Self-hosted Desktop Commander Remote hub (runs on Raspberry Pi)",
   "type": "module",

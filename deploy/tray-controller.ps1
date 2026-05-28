@@ -1,16 +1,30 @@
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
-$trayLogPath = 'C:\dev\Desktop-Projects\Desktop-Commander-Remote\tray.current.log'
+$deployDir = $PSScriptRoot
+$pkDcDir = Split-Path -Parent $deployDir
+$nodeModulesDir = Split-Path -Parent $pkDcDir
+
+# Check if we are running in the development workspace or from npm installation
+if (Test-Path (Join-Path $pkDcDir 'device')) {
+    $rootPath = $pkDcDir
+    $wdir = Join-Path $rootPath 'device'
+    $hubDir = Join-Path $rootPath 'hub'
+} else {
+    $rootPath = $pkDcDir
+    $wdir = Join-Path $nodeModulesDir 'pk-desktop-commander-device'
+    $hubDir = Join-Path $nodeModulesDir 'pk-desktop-commander-hub'
+}
+
+$trayLogPath = Join-Path $rootPath 'tray.current.log'
 $taskName = 'DC-Remote-Device'
 $hubTaskName = 'DC-Remote-Hub'
 $cloudflaredTaskName = 'DC-Remote-Cloudflared'
 $trayTaskName = 'DC-Remote-Tray'
-$rootPath = Split-Path -Parent $PSScriptRoot
-$logPath = 'C:\dev\Desktop-Projects\Desktop-Commander-Remote\device\device.current.log'
-$hubLogPath = Join-Path $rootPath 'hub\hub.current.log'
+$logPath = Join-Path $wdir 'device.current.log'
+$hubLogPath = Join-Path $hubDir 'hub.current.log'
 $cloudflaredLogPath = Join-Path $rootPath 'cloudflared.current.log'
-$envPath = Join-Path $rootPath 'device\.env'
+$envPath = Join-Path $wdir '.env'
 
 function Write-TrayLog([string]$message) {
     try {
@@ -82,14 +96,14 @@ function Test-ProcessPattern([string[]]$patterns) {
 }
 
 function Get-DeviceState {
-    if (Test-ProcessPattern @('*Desktop-Commander-Remote*device*dist*index.js*')) {
+    if (Test-ProcessPattern @('*Desktop-Commander-Remote*device*dist*index.js*', '*pk-desktop-commander-device*dist*index.js*')) {
         return 'Running'
     }
     Get-TaskState $taskName
 }
 
 function Get-HubState {
-    if (Test-ProcessPattern @('*Desktop-Commander-Remote*hub*dist*index.js*')) {
+    if (Test-ProcessPattern @('*Desktop-Commander-Remote*hub*dist*index.js*', '*pk-desktop-commander-hub*dist*index.js*')) {
         return 'Running'
     }
     Get-TaskState $hubTaskName
@@ -150,7 +164,8 @@ function Stop-ServerStack {
     Start-Sleep -Seconds 1
     Stop-RepoProcesses @(
         '*cloudflared*tunnel*run*dc-hub-windows*',
-        '*Desktop-Commander-Remote*hub*dist*index.js*'
+        '*Desktop-Commander-Remote*hub*dist*index.js*',
+        '*pk-desktop-commander-hub*dist*index.js*'
     )
 }
 

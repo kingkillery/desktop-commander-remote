@@ -1,5 +1,5 @@
 {
-  "name": "dc-remote-device",
+  "name": "pk-desktop-commander-device",
   "version": "1.0.0",
   "description": "Desktop Commander Remote device client - connect your machine to the Pi hub",
   "type": "module",
@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",
+    "pk-desktop-commander": "^0.2.41",
     "ws": "^8.18.0"
   },
   "devDependencies": {

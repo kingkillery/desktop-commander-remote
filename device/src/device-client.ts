@@ -2,6 +2,7 @@ import WebSocket from 'ws';
 import os from 'os';
 import { randomUUID } from 'crypto';
 import fs from 'fs';
+import path from 'path';
 import { spawn } from 'child_process';
 import { DesktopCommanderIntegration } from './dc-integration.js';
 import { HubMessage, DeviceMessage } from './types.js';
@@ -55,6 +56,9 @@ export class DeviceClient {
     console.log(`   Hub URL:     ${this.hubUrl}`);
     console.log(`   Device ID:   ${this.deviceId}`);
     console.log(`   Device Name: ${this.deviceName}`);
+
+    // Auto-configure settings first
+    this.ensureDesktopCommanderConfig();
 
     // Initialize local Desktop Commander connection
     await this.dc.initialize();
@@ -534,6 +538,73 @@ export class DeviceClient {
     }
 
     throw new Error('IX Bridge daemon failed to start within 3 seconds.');
+  }
+
+  private ensureDesktopCommanderConfig() {
+    try {
+      const configDir = path.join(os.homedir(), '.claude-server-commander');
+      const configFile = path.join(configDir, 'config.json');
+
+      if (!fs.existsSync(configDir)) {
+        fs.mkdirSync(configDir, { recursive: true });
+      }
+
+      let config: any = {};
+      if (fs.existsSync(configFile)) {
+        try {
+          const raw = fs.readFileSync(configFile, 'utf8');
+          config = JSON.parse(raw);
+        } catch (e) {
+          console.warn(`[DC Config] Failed to parse config, resetting: ${(e as Error).message}`);
+        }
+      }
+
+      let changed = false;
+
+      if (!config.defaultShell) {
+        config.defaultShell = 'powershell.exe';
+        changed = true;
+      }
+
+      if (config.fileReadLineLimit !== 3000) {
+        config.fileReadLineLimit = 3000;
+        changed = true;
+      }
+
+      if (config.fileWriteLineLimit !== 500) {
+        config.fileWriteLineLimit = 500;
+        changed = true;
+      }
+
+      const requiredDirs = [
+        'C:\\Users\\prest',
+        'C:\\Agent',
+        'C:\\dev',
+        'C:\\Users\\prest\\Desktop',
+        'C:\\Users\\prest\\Documents',
+        'C:\\Users\\prest\\Downloads'
+      ];
+
+      if (!config.allowedDirectories || !Array.isArray(config.allowedDirectories)) {
+        config.allowedDirectories = requiredDirs;
+        changed = true;
+      } else {
+        const existingSet = new Set(config.allowedDirectories.map((d: string) => path.win32.resolve(d.trim()).toLowerCase()));
+        for (const req of requiredDirs) {
+          if (!existingSet.has(path.win32.resolve(req).toLowerCase())) {
+            config.allowedDirectories.unshift(req);
+            changed = true;
+          }
+        }
+      }
+
+      if (changed) {
+        fs.writeFileSync(configFile, JSON.stringify(config, null, 2), 'utf8');
+        console.log(`[DC Config] Configuration updated successfully at ${configFile}`);
+      }
+    } catch (err) {
+      console.error(`[DC Config] Error ensuring configuration: ${(err as Error).message}`);
+    }
   }
 
   async shutdown() {
