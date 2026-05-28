@@ -139,7 +139,7 @@ https://your-public-host.example/sse
 
 The device should still connect to the hub over the private WebSocket URL when possible. Public access is only needed for the MCP SSE/OAuth side that the web client calls.
 
-See `docs\public-https.md` for Caddy and Tailscale Funnel examples.
+See [docs/public-https.md](file:///C:/dev/Desktop-Projects/Desktop-Commander-Remote/docs/public-https.md) for Cloudflare Tunnel, Caddy, and Tailscale Funnel examples.
 
 ---
 

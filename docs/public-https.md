@@ -33,6 +33,48 @@ your-public-host.example {
 }
 ```
 
+## Cloudflare Tunnel option (Recommended for easy setup)
+
+Cloudflare Tunnels let you expose your local hub securely to the public internet without opening ports on your router or configuring dynamic DNS.
+
+1. **Install cloudflared**:
+   Download and install the Cloudflare Tunnel daemon (`cloudflared`) on the hub machine.
+
+2. **Authenticate**:
+   Run the login command in your terminal and follow the URL to authorize the tunnel with your Cloudflare domain:
+   ```bash
+   cloudflared tunnel login
+   ```
+
+3. **Create the tunnel**:
+   Create a new named tunnel (e.g., `dc-hub`):
+   ```bash
+   cloudflared tunnel create dc-hub
+   ```
+   *Note: This generates a UUID and a credentials JSON file in `~/.cloudflared/`.*
+
+4. **Associate DNS**:
+   Link your custom domain/subdomain to the tunnel:
+   ```bash
+   cloudflared tunnel route dns dc-hub your-public-host.example
+   ```
+
+5. **Create configuration**:
+   Create or edit `~/.cloudflared/config.yml` with the following configuration (replace `<tunnel-uuid>`):
+   ```yaml
+   url: http://localhost:3000
+   tunnel: <tunnel-uuid>
+   credentials-file: /Users/<your-username>/.cloudflared/<tunnel-uuid>.json
+   ```
+
+6. **Run the tunnel**:
+   Start the tunnel daemon:
+   ```bash
+   cloudflared tunnel run dc-hub
+   ```
+
+When deploying on Windows using our registration task, the `DC-Remote-Cloudflared` scheduled task automatically runs `cloudflared tunnel run dc-hub-windows` headlessly. Simply name your tunnel `dc-hub-windows` and it will work out of the box!
+
 ChatGPT MCP URL:
 
 ```text
