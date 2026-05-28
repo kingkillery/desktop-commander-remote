@@ -152,6 +152,100 @@ Bootstrap a PowerShell session for agent work:
 
 ---
 
+## Browser tool — IX Bridge Extension
+
+**Canonical repo:** https://github.com/kingkillery/ix-bridge-ex  
+**Local path:** `C:\dev\Desktop-Projects\IX-Bridge-Extension`
+
+IX Bridge is the primary browser-control tool for this repo. It is a
+Chrome/Edge Manifest V3 extension + a local Node daemon that lets agents
+operate the user's real browser session.
+
+> **Always use IX Bridge for browser tasks — not Playwright, not Puppeteer,
+> not Kimi WebBridge (port 10086).**
+
+### Health check (do this before any browser work)
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:18086/ix-bridge/status
+```
+
+Healthy response:
+
+```json
+{ "running": true, "extension_connected": true }
+```
+
+If not running, start the daemon:
+
+```powershell
+node C:\dev\Desktop-Projects\IX-Bridge-Extension\daemon.js
+# or on Windows:
+C:\dev\Desktop-Projects\IX-Bridge-Extension\start-daemon.cmd
+```
+
+If `extension_connected` is false, ask the user to reload the unpacked
+extension in `chrome://extensions` from the folder above.
+
+### Command API
+
+```
+POST http://127.0.0.1:18086/ix-bridge/command
+{ "action": "tool_name", "args": {}, "session": "stable-session-name" }
+```
+
+### Available actions
+
+| Action | Purpose |
+|--------|---------|
+| `navigate` | Open a URL (use `newTab:true` for first page in a session) |
+| `find_tab` | Attach to an existing open tab (`active:true` for current) |
+| `snapshot` | Get accessibility tree + `@e` refs for click/fill targets |
+| `click` | Click an element by `@e` ref or CSS selector |
+| `fill` | Type into an input by `@e` ref |
+| `evaluate` | Run JS in the page (use only when snapshot is insufficient) |
+| `screenshot` | Capture a visual screenshot |
+| `network` | Inspect network requests |
+| `key_type` / `send_keys` | Send keystrokes |
+| `mouse_click` | Raw mouse click by coordinates |
+| `cdp` | Raw Chrome DevTools Protocol command |
+| `save_as_pdf` | Save page as PDF |
+| `upload` | Upload a file to an input |
+| `list_tabs` | List open tabs |
+| `close_tab` / `close_session` | Clean up tabs |
+
+### Workflow rules
+
+1. **Health-check first** — verify `running` and `extension_connected` before any browser command.
+2. **Use stable session names** — e.g. `"github"`, `"chatgpt"`, `"ix-research"` — so tabs stay grouped.
+3. **`snapshot` before `click`/`fill`** — use returned `@e` refs for reliable targeting.
+4. **`evaluate` last** — only when snapshot does not expose the needed element.
+5. **Never use port `10086`** — that is Kimi WebBridge; IX Bridge is always `18086` under `/ix-bridge/`.
+
+### PowerShell quick-reference
+
+```powershell
+# Status
+Invoke-RestMethod http://127.0.0.1:18086/ix-bridge/status
+
+# Navigate
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:18086/ix-bridge/command `
+  -ContentType 'application/json' `
+  -Body '{"action":"navigate","args":{"url":"https://github.com","newTab":true},"session":"github"}'
+
+# Snapshot
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:18086/ix-bridge/command `
+  -ContentType 'application/json' `
+  -Body '{"action":"snapshot","args":{},"session":"github"}'
+
+# Click
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:18086/ix-bridge/command `
+  -ContentType 'application/json' `
+  -Body '{"action":"click","args":{"selector":"@e1"},"session":"github"}'
+```
+
+---
+
 ## Test files
 
 | File | Package | Tests | Covers |
