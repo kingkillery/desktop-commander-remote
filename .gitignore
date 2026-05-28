@@ -8,6 +8,8 @@ HANDOFF.md
 **/.env
 **/.env.*
 device/run-hidden.vbs
+hub/run-hidden.vbs
+cloudflared-run-hidden.vbs
 device-deploy.zip
 
 # Hub-side runtime backups created during deploys

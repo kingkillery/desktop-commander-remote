@@ -16,13 +16,13 @@ export interface ApprovedDirectory {
 
 function getApprovedDirectoryRoots(): ApprovedDirectoryRoot[] {
   const roots: ApprovedDirectoryRoot[] = [
-    { id: 'user_profile', label: 'User profile', path: 'C:\\Users\\prest' },
+    { id: 'agent_workspace', label: 'Agent Workspace', path: 'C:\\Agent' },
     { id: 'dev', label: 'Development', path: 'C:\\dev' },
-    {
-      id: 'spwr_artifacts',
-      label: 'SPWR artifacts',
-      path: 'C:\\Users\\prest\\Desktop\\SPWR-Daily\\Interconnection-Dash-2026\\.artifacts',
-    },
+    { id: 'dev_projects', label: 'Development Projects', path: 'C:\\dev\\Desktop-Projects' },
+    { id: 'desktop', label: 'Desktop', path: 'C:\\Users\\prest\\Desktop' },
+    { id: 'spwr_dash', label: 'SPWR Interconnection Dash', path: 'C:\\Users\\prest\\Desktop\\SPWR-Daily\\Interconnection-Dash-2026' },
+    { id: 'documents', label: 'Documents', path: 'C:\\Users\\prest\\Documents' },
+    { id: 'downloads', label: 'Downloads', path: 'C:\\Users\\prest\\Downloads' },
   ];
 
   const homeDir = process.env.DC_HOME_DIR?.trim();

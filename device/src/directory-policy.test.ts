@@ -11,9 +11,13 @@ import {
 
 test('device directory policy accepts only approved roots', () => {
   assert.deepEqual(getDirectoryRoots().map((root) => root.path), [
-    'C:\\Users\\prest',
+    'C:\\Agent',
     'C:\\dev',
-    'C:\\Users\\prest\\Desktop\\SPWR-Daily\\Interconnection-Dash-2026\\.artifacts',
+    'C:\\dev\\Desktop-Projects',
+    'C:\\Users\\prest\\Desktop',
+    'C:\\Users\\prest\\Desktop\\SPWR-Daily\\Interconnection-Dash-2026',
+    'C:\\Users\\prest\\Documents',
+    'C:\\Users\\prest\\Downloads',
   ]);
   assert.equal(validateDirectoryPath('C:\\dev\\Desktop-Projects').rootId, 'dev');
   assert.equal(validateDirectoryPath('c:/dev').path, 'C:\\dev');

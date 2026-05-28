@@ -30,6 +30,11 @@ const WS_PORT = process.env.WS_PORT ? parseInt(process.env.WS_PORT, 10) : null;
 // Single-port mode: WS_PORT not set → WebSocket attaches to HTTP server (required for Cloud Run)
 const SINGLE_PORT = WS_PORT === null || WS_PORT === PORT;
 
+// Connection persistence tuning
+const SSE_KEEPALIVE_INTERVAL_MS = parseInt(process.env.SSE_KEEPALIVE_INTERVAL_MS || '30000', 10);
+const DEFAULT_TOOL_TIMEOUT_MS = parseInt(process.env.DEFAULT_TOOL_TIMEOUT_MS || '300000', 10);
+const DEFAULT_JOB_TIMEOUT_MS = parseInt(process.env.DEFAULT_JOB_TIMEOUT_MS || '300000', 10);
+
 const registry = new DeviceRegistry();
 const jobs = new HubJobRegistry();
 const auth = new AuthManager();
@@ -264,6 +269,9 @@ app.get('/oauth/info', (req, res) => {
     clientId: client.clientId,
     authUrl: `${publicUrl}/oauth/authorize`,
     tokenUrl: `${publicUrl}/oauth/token`,
+    accessTokenTtlSeconds: OAUTH_ACCESS_TOKEN_TTL_SECONDS,
+    accessTokenTtlDays: OAUTH_ACCESS_TOKEN_TTL_SECONDS / 86400,
+    refreshTokenSupported: true,
   });
 });
 
@@ -452,6 +460,7 @@ app.post('/oauth/token', (req, res) => {
           access_token: apiKeys[0].key,
           token_type: 'Bearer',
           expires_in: OAUTH_ACCESS_TOKEN_TTL_SECONDS,
+          refresh_token: apiKeys[0].key,
           scope: 'tools',
         });
       } else {
@@ -474,6 +483,7 @@ app.post('/oauth/token', (req, res) => {
       access_token: token,
       token_type: 'Bearer',
       expires_in: OAUTH_ACCESS_TOKEN_TTL_SECONDS,
+      refresh_token: token,
       scope: 'tools',
     });
   });
@@ -537,12 +547,22 @@ app.get(ssePaths, (req, res) => {
   sseTransports.set(transport.sessionId, transport);
   console.log(`[MCP] Session stored: ${transport.sessionId}`);
 
+  // Keepalive: send periodic SSE comments to prevent proxy idle timeouts
+  const keepaliveTimer = setInterval(() => {
+    if (res.writableEnded) {
+      clearInterval(keepaliveTimer);
+      return;
+    }
+    res.write(':keepalive\n\n');
+  }, SSE_KEEPALIVE_INTERVAL_MS);
+
   const mcpServer = buildMcpServer();
   mcpServer.connect(transport).catch((err) => {
     console.error('[MCP] Server connect error:', err);
   });
 
   res.on('close', () => {
+    clearInterval(keepaliveTimer);
     sseTransports.delete(transport.sessionId);
     console.log(`[MCP] AI client disconnected: ${clientIp}`);
   });

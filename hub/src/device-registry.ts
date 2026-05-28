@@ -84,7 +84,7 @@ export class DeviceRegistry {
     toolName: string,
     toolArgs: Record<string, unknown>,
     metadata?: Record<string, unknown>,
-    timeoutMs = 120_000
+    timeoutMs = 300_000
   ): Promise<unknown> {
     const deviceId = this.findDeviceForTool(toolName);
     if (!deviceId) {
@@ -105,7 +105,7 @@ export class DeviceRegistry {
     toolName: string,
     toolArgs: Record<string, unknown>,
     metadata?: Record<string, unknown>,
-    timeoutMs = 120_000
+    timeoutMs = 300_000
   ): Promise<unknown> {
     const entry = this.devices.get(deviceId);
     if (!entry) throw new Error(`Device not connected: ${deviceId}`);
@@ -172,7 +172,7 @@ export class DeviceRegistry {
     throw new Error('Multiple devices connected. Provide deviceId.');
   }
 
-  sendJobStart(jobArgs: JobStartArgs, deviceId?: string, timeoutMs = 30_000): Promise<unknown> {
+  sendJobStart(jobArgs: JobStartArgs, deviceId?: string, timeoutMs = 300_000): Promise<unknown> {
     return this.sendJobMessage(this.getDeviceIdForRequest(deviceId), (callId) => ({
       type: 'job_start',
       callId,
@@ -180,7 +180,7 @@ export class DeviceRegistry {
     }), timeoutMs);
   }
 
-  sendJobStatus(jobId: string, deviceId?: string, timeoutMs = 30_000): Promise<unknown> {
+  sendJobStatus(jobId: string, deviceId?: string, timeoutMs = 300_000): Promise<unknown> {
     return this.sendJobMessage(this.getDeviceIdForRequest(deviceId), (callId) => ({
       type: 'job_status',
       callId,
@@ -193,7 +193,7 @@ export class DeviceRegistry {
     stream?: 'stdout' | 'stderr' | 'both',
     bytes?: number,
     deviceId?: string,
-    timeoutMs = 30_000
+    timeoutMs = 300_000
   ): Promise<unknown> {
     return this.sendJobMessage(this.getDeviceIdForRequest(deviceId), (callId) => ({
       type: 'job_tail',
@@ -204,7 +204,7 @@ export class DeviceRegistry {
     }), timeoutMs);
   }
 
-  sendJobCancel(jobId: string, deviceId?: string, timeoutMs = 30_000): Promise<unknown> {
+  sendJobCancel(jobId: string, deviceId?: string, timeoutMs = 300_000): Promise<unknown> {
     return this.sendJobMessage(this.getDeviceIdForRequest(deviceId), (callId) => ({
       type: 'job_cancel',
       callId,

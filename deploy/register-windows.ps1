@@ -1,10 +1,17 @@
 # Register DC-Remote-Device as a scheduled task that starts at login
 $node   = 'C:\Program Files\nodejs\node.exe'
 $script = 'C:\dev\Desktop-Projects\Desktop-Commander-Remote\device\dist\index.js'
+$hubScript = 'C:\dev\Desktop-Projects\Desktop-Commander-Remote\hub\dist\index.js'
 $wdir   = 'C:\dev\Desktop-Projects\Desktop-Commander-Remote\device'
+$hubDir = 'C:\dev\Desktop-Projects\Desktop-Commander-Remote\hub'
+$rootDir = 'C:\dev\Desktop-Projects\Desktop-Commander-Remote'
 $tray   = 'C:\dev\Desktop-Projects\Desktop-Commander-Remote\deploy\tray-controller.ps1'
 $runner = Join-Path $wdir 'run-hidden.vbs'
+$hubRunner = Join-Path $hubDir 'run-hidden.vbs'
+$cloudflaredRunner = Join-Path $rootDir 'cloudflared-run-hidden.vbs'
 $log    = Join-Path $wdir 'device.current.log'
+$hubLog = Join-Path $hubDir 'hub.current.log'
+$cloudflaredLog = Join-Path $rootDir 'cloudflared.current.log'
 
 function Quote-CmdArg([string]$value) {
     '"' + ($value -replace '"', '\"') + '"'
@@ -35,6 +42,8 @@ function Ensure-Utf8Bom([string]$path) {
 }
 
 Ensure-Utf8Bom $log
+Ensure-Utf8Bom $hubLog
+Ensure-Utf8Bom $cloudflaredLog
 
 $cmd = 'cmd.exe /d /c call ' + (Quote-CmdArg $node) + ' ' + (Quote-CmdArg $script) + ' >> ' + (Quote-CmdArg $log) + ' 2>&1'
 @"
@@ -43,14 +52,46 @@ shell.CurrentDirectory = $(Quote-VbsString $wdir)
 shell.Run $(Quote-VbsString $cmd), 0, True
 "@ | Set-Content -LiteralPath $runner -Encoding ASCII
 
+$hubCmd = 'cmd.exe /d /c set PORT=3000&& set PUBLIC_URL=https://hub.pkking.computer&& set OAUTH_ACCESS_TOKEN_TTL_SECONDS=2592000&& set WS_PORT=&& call ' + (Quote-CmdArg $node) + ' ' + (Quote-CmdArg $hubScript) + ' >> ' + (Quote-CmdArg $hubLog) + ' 2>&1'
+@"
+Set shell = CreateObject("WScript.Shell")
+shell.CurrentDirectory = $(Quote-VbsString $hubDir)
+shell.Run $(Quote-VbsString $hubCmd), 0, True
+"@ | Set-Content -LiteralPath $hubRunner -Encoding ASCII
+
+$cloudflaredCmd = 'cmd.exe /d /c cloudflared tunnel run dc-hub-windows >> ' + (Quote-CmdArg $cloudflaredLog) + ' 2>&1'
+@"
+Set shell = CreateObject("WScript.Shell")
+shell.CurrentDirectory = $(Quote-VbsString $rootDir)
+shell.Run $(Quote-VbsString $cloudflaredCmd), 0, True
+"@ | Set-Content -LiteralPath $cloudflaredRunner -Encoding ASCII
+
+$hubAction = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('//B //Nologo ' + (Quote-CmdArg $hubRunner)) -WorkingDirectory $hubDir
+$cloudflaredAction = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('//B //Nologo ' + (Quote-CmdArg $cloudflaredRunner)) -WorkingDirectory $rootDir
 $action    = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument ('//B //Nologo ' + (Quote-CmdArg $runner)) -WorkingDirectory $wdir
-$trayAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File ' + (Quote-CmdArg $tray)) -WorkingDirectory (Split-Path -Parent $tray)
+$trayAction = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument ('-NoProfile -STA -ExecutionPolicy Bypass -WindowStyle Hidden -File ' + (Quote-CmdArg $tray)) -WorkingDirectory (Split-Path -Parent $tray)
 $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $settings  = New-ScheduledTaskSettingsSet `
     -RestartCount 5 `
     -RestartInterval (New-TimeSpan -Minutes 1) `
     -ExecutionTimeLimit (New-TimeSpan -Hours 0)
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+
+Register-ScheduledTask `
+    -TaskName "DC-Remote-Hub" `
+    -Action $hubAction `
+    -Trigger $trigger `
+    -Settings $settings `
+    -Principal $principal `
+    -Force | Select-Object TaskName, State
+
+Register-ScheduledTask `
+    -TaskName "DC-Remote-Cloudflared" `
+    -Action $cloudflaredAction `
+    -Trigger $trigger `
+    -Settings $settings `
+    -Principal $principal `
+    -Force | Select-Object TaskName, State
 
 Register-ScheduledTask `
     -TaskName "DC-Remote-Device" `
@@ -70,7 +111,10 @@ Register-ScheduledTask `
 
 Write-Host ""
 Write-Host "Starting now..."
+Start-ScheduledTask -TaskName "DC-Remote-Hub"
+Start-ScheduledTask -TaskName "DC-Remote-Cloudflared"
+Start-Sleep 3
 Start-ScheduledTask -TaskName "DC-Remote-Device"
 Start-ScheduledTask -TaskName "DC-Remote-Tray"
 Start-Sleep 2
-Get-ScheduledTask -TaskName "DC-Remote-Device", "DC-Remote-Tray" | Select-Object TaskName, State
+Get-ScheduledTask -TaskName "DC-Remote-Hub", "DC-Remote-Cloudflared", "DC-Remote-Device", "DC-Remote-Tray" | Select-Object TaskName, State
