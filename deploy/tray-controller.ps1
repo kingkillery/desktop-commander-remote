@@ -173,27 +173,63 @@ function Get-RemoteServiceName {
     return 'dc-device.service'
 }
 
-function Restart-RemoteDevice {
-    # Restart the remote device client over Tailscale SSH (e.g. the hetzner-cloud
-    # systemd service). Uses key-based OpenSSH; the tray user must have an SSH key
-    # authorized on the remote host.
-    $target = Get-RemoteSshTarget
-    $svc = Get-RemoteServiceName
+function Get-RemoteDeviceList {
+    # Comma-separated list of SSH targets (user@host). Falls back to the single
+    # DC_REMOTE_SSH target when DC_REMOTE_DEVICES is not set.
+    $val = Get-EnvValue 'DC_REMOTE_DEVICES'
+    if ($val) {
+        return @($val -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    }
+    return @(Get-RemoteSshTarget)
+}
+
+function Invoke-RemoteRestart([string]$target, [string]$svc) {
+    # Restart one remote device's service over Tailscale SSH. Returns a result
+    # object { Ok = bool; Line = "..." }. Uses key-based OpenSSH. stderr is
+    # discarded from the captured output (PS 5.1 wraps native stderr in
+    # NativeCommandError records); the SSH exit code is the source of truth.
     Write-TrayLog "Restarting remote device $target ($svc)"
     try {
-        $out = & ssh.exe -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new $target "systemctl restart $svc; sleep 1; systemctl is-active $svc" 2>&1 | Out-String
+        $stdout = (& ssh.exe -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new $target "systemctl restart $svc; sleep 1; systemctl is-active $svc" 2>$null) | Out-String
         $code = $LASTEXITCODE
-        $status = ($out -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
+        $status = ($stdout -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
         if ($status) { $status = $status.Trim() }
         if ($code -eq 0 -and $status -eq 'active') {
-            [System.Windows.Forms.MessageBox]::Show("Restarted $svc on $target.`nStatus: active", 'Remote device', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
-        } else {
-            [System.Windows.Forms.MessageBox]::Show("Restart returned exit $code (status: $status).`n`n$out", 'Remote device', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+            return @{ Ok = $true; Line = "OK    $target -> active" }
         }
+        if ($code -ne 0) {
+            return @{ Ok = $false; Line = "FAIL  $target -> ssh exit $code (unreachable or auth/permission failure)" }
+        }
+        return @{ Ok = $false; Line = "FAIL  $target -> service status: $status" }
     } catch {
-        Write-TrayLog "Remote restart error: $($_.Exception.Message)"
-        [System.Windows.Forms.MessageBox]::Show("SSH error: $($_.Exception.Message)", 'Remote device', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+        Write-TrayLog "Remote restart error ($target): $($_.Exception.Message)"
+        return @{ Ok = $false; Line = "ERROR $target -> $($_.Exception.Message)" }
     }
+}
+
+function Restart-RemoteDevice {
+    $svc = Get-RemoteServiceName
+    $r = Invoke-RemoteRestart (Get-RemoteSshTarget) $svc
+    $icon = if ($r.Ok) { [System.Windows.Forms.MessageBoxIcon]::Information } else { [System.Windows.Forms.MessageBoxIcon]::Warning }
+    [System.Windows.Forms.MessageBox]::Show($r.Line, 'Remote device', [System.Windows.Forms.MessageBoxButtons]::OK, $icon) | Out-Null
+    Start-Sleep -Milliseconds 500
+    Refresh-Tray
+}
+
+function Restart-AllRemoteDevices {
+    $svc = Get-RemoteServiceName
+    $targets = Get-RemoteDeviceList
+    if (-not $targets -or $targets.Count -eq 0) {
+        [System.Windows.Forms.MessageBox]::Show('No remote devices configured (DC_REMOTE_DEVICES / DC_REMOTE_SSH).', 'Remote devices', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        return
+    }
+    $results = @()
+    foreach ($target in $targets) {
+        $results += (Invoke-RemoteRestart $target $svc).Line
+    }
+    $allOk = -not ($results | Where-Object { $_ -notlike 'OK*' })
+    $icon = if ($allOk) { [System.Windows.Forms.MessageBoxIcon]::Information } else { [System.Windows.Forms.MessageBoxIcon]::Warning }
+    [System.Windows.Forms.MessageBox]::Show(($results -join "`n"), "Restart all remote devices ($($targets.Count))", [System.Windows.Forms.MessageBoxButtons]::OK, $icon) | Out-Null
     Start-Sleep -Milliseconds 500
     Refresh-Tray
 }
@@ -370,6 +406,11 @@ $restartRemoteItem.Text = 'Restart remote device (SSH)'
 $restartRemoteItem.Add_Click({ Restart-RemoteDevice })
 [void]$contextMenu.Items.Add($restartRemoteItem)
 
+$restartAllRemoteItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$restartAllRemoteItem.Text = 'Restart all remote devices (SSH)'
+$restartAllRemoteItem.Add_Click({ Restart-AllRemoteDevices })
+[void]$contextMenu.Items.Add($restartAllRemoteItem)
+
 $setHubUrlItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $setHubUrlItem.Text = 'Set Hub URL...'
 $setHubUrlItem.Add_Click({
@@ -434,6 +475,18 @@ $setRemoteSshItem.Add_Click({
     }
 })
 [void]$contextMenu.Items.Add($setRemoteSshItem)
+
+$setRemoteListItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$setRemoteListItem.Text = 'Set remote devices list...'
+$setRemoteListItem.Add_Click({
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    $current = (Get-RemoteDeviceList) -join ', '
+    $newList = [Microsoft.VisualBasic.Interaction]::InputBox('Comma-separated SSH targets for "Restart all" (user@host, user@host, ...):', 'Set Remote Devices List', $current)
+    if ($newList -and $newList.Trim()) {
+        Set-EnvValue 'DC_REMOTE_DEVICES' (($newList -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join ',')
+    }
+})
+[void]$contextMenu.Items.Add($setRemoteListItem)
 
 [void]$contextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 
