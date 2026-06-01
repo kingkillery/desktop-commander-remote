@@ -145,6 +145,22 @@ function Get-HubHealthSummary {
     return 'Not listening'
 }
 
+function Get-HubDeviceSummary {
+    # Ask the hub which device clients are actually registered (msi + any remote
+    # devices like hetzner-cloud). /health needs no auth. Marks the default with *.
+    try {
+        $h = Invoke-RestMethod -Uri 'http://localhost:3000/health' -TimeoutSec 3
+        if (-not $h.devices -or @($h.devices).Count -eq 0) { return 'none connected' }
+        $parts = @($h.devices) | ForEach-Object {
+            $star = if ($_.isDefault) { '*' } else { '' }
+            "$($_.id)$star ($($_.tools))"
+        }
+        return ($parts -join ', ')
+    } catch {
+        return 'hub unreachable'
+    }
+}
+
 function Stop-RepoProcesses([string[]]$patterns) {
     $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         $cmd = $_.CommandLine
@@ -196,6 +212,7 @@ function Refresh-Tray {
         $notifyIcon.Text = Limit-MenuText "DC Remote: Hub $hubState / Device $state" 63
         $serverStatusItem.Text = "Server: Hub $hubState, Tunnel $cloudflaredState"
         $hubHealthItem.Text = "Hub health: $hubHealth"
+        $devicesItem.Text = Limit-MenuText ("Devices: " + (Get-HubDeviceSummary))
         $statusItem.Text = "Device task: $state"
         $trayStatusItem.Text = "Tray task: $trayState"
         $lastLogItem.Text = "Recent: $lastLine"
@@ -219,6 +236,7 @@ function Refresh-Tray {
         $notifyIcon.Text = 'DC Remote: refresh failed'
         $serverStatusItem.Text = 'Server: refresh failed'
         $hubHealthItem.Text = 'Hub health: unknown'
+        $devicesItem.Text = 'Devices: unknown'
         $statusItem.Text = 'Device task: unknown'
         $trayStatusItem.Text = 'Tray task: unknown'
     }
@@ -233,6 +251,10 @@ $serverStatusItem.Enabled = $false
 $hubHealthItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $hubHealthItem.Enabled = $false
 [void]$contextMenu.Items.Add($hubHealthItem)
+
+$devicesItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$devicesItem.Enabled = $false
+[void]$contextMenu.Items.Add($devicesItem)
 
 $statusItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $statusItem.Enabled = $false

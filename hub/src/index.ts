@@ -155,11 +155,13 @@ app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     version: '1.0.0',
+    defaultDevice: registry.getDefaultDeviceId(),
     devices: devices.map((d) => ({
       id: d.deviceId,
       name: d.deviceName,
       tools: d.tools.length,
       connectedAt: d.connectedAt,
+      isDefault: d.deviceId === registry.getDefaultDeviceId(),
     })),
     cliAdapters,
   });
