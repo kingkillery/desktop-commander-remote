@@ -4,6 +4,25 @@ import { randomUUID } from 'crypto';
 
 export class DeviceRegistry {
   private devices = new Map<string, { info: DeviceInfo; ws: WebSocket; pending: Map<string, PendingCall> }>();
+  private defaultDeviceId?: string;
+
+  /** Configure the device that bare (no-selector) calls route to when several devices are connected. */
+  setDefaultDeviceId(id?: string) {
+    this.defaultDeviceId = id && id.trim() ? id.trim() : undefined;
+  }
+
+  getDefaultDeviceId(): string | undefined {
+    return this.defaultDeviceId;
+  }
+
+  /** Device ids currently connected, with the default (if any) marked. */
+  listDeviceIds(): Array<{ deviceId: string; deviceName: string; isDefault: boolean }> {
+    return Array.from(this.devices.values()).map((e) => ({
+      deviceId: e.info.deviceId,
+      deviceName: e.info.deviceName,
+      isDefault: e.info.deviceId === this.defaultDeviceId,
+    }));
+  }
 
   register(ws: WebSocket, deviceId: string, deviceName: string, tools: DeviceTool[]) {
     // Clean up existing connection for same device if any
@@ -64,13 +83,55 @@ export class DeviceRegistry {
     if (this.devices.size === 1) {
       return this.devices.keys().next().value;
     }
-    // Multi-device: strip prefix
+    // Multi-device: an explicit `<deviceId>_` prefix wins
     for (const [deviceId] of this.devices) {
       if (toolName.startsWith(`${deviceId}_`)) {
         return deviceId;
       }
     }
+    // Bare tool name with several devices connected: fall back to the
+    // configured default device (e.g. msi-windows-main) when it is connected.
+    if (this.defaultDeviceId && this.devices.has(this.defaultDeviceId)) {
+      return this.defaultDeviceId;
+    }
     return undefined;
+  }
+
+  /** Advertise a single, unprefixed tool set (the default device's, or the first
+   *  connected device's). Device selection happens via an explicit `device`
+   *  argument on the call, not via prefixed tool names. */
+  getAdvertisedTools(): DeviceTool[] {
+    const targetId =
+      this.defaultDeviceId && this.devices.has(this.defaultDeviceId)
+        ? this.defaultDeviceId
+        : this.devices.keys().next().value;
+    if (!targetId) return [];
+    return this.devices.get(targetId)!.info.tools;
+  }
+
+  /** Call a tool, optionally on an explicitly named device. Falls back to the
+   *  default/prefix/single-device resolution when no device is given. */
+  async callToolRouted(
+    toolName: string,
+    toolArgs: Record<string, unknown>,
+    deviceId?: string,
+    timeoutMs = 300_000
+  ): Promise<unknown> {
+    let target: string | undefined;
+    if (deviceId) {
+      if (!this.devices.has(deviceId)) throw new Error(`Device not connected: ${deviceId}`);
+      target = deviceId;
+    } else {
+      target = this.findDeviceForTool(toolName);
+    }
+    if (!target) {
+      throw new Error(
+        this.devices.size === 0
+          ? 'No devices connected. Start the device client on your machine.'
+          : `No device found for tool: ${toolName}`
+      );
+    }
+    return this.callToolOnDevice(target, this.resolveToolName(target, toolName), toolArgs, undefined, timeoutMs);
   }
 
   resolveToolName(deviceId: string, toolName: string): string {
@@ -166,10 +227,14 @@ export class DeviceRegistry {
     if (this.devices.size === 1) {
       return this.devices.keys().next().value!;
     }
+    // Several devices: prefer the configured default when it is connected.
+    if (this.defaultDeviceId && this.devices.has(this.defaultDeviceId)) {
+      return this.defaultDeviceId;
+    }
     if (this.devices.size === 0) {
       throw new Error('No devices connected. Start the device client on your machine.');
     }
-    throw new Error('Multiple devices connected. Provide deviceId.');
+    throw new Error('Multiple devices connected. Provide a device.');
   }
 
   sendJobStart(jobArgs: JobStartArgs, deviceId?: string, timeoutMs = 300_000): Promise<unknown> {

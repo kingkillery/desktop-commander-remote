@@ -55,6 +55,16 @@ const jobs = new HubJobRegistry();
 const auth = new AuthManager();
 const cliRegistry = new CliMcpRegistry();
 
+// Device that bare (no `device` selector) calls route to when several devices
+// are connected. Defaults to the first-connected device when unset.
+registry.setDefaultDeviceId(process.env.DEFAULT_DEVICE_ID);
+
+/** Read the optional device selector (`device` or legacy `deviceId`) from args. */
+function readDeviceSelector(args: Record<string, unknown> | undefined): string | undefined {
+  const v = args?.device ?? args?.deviceId;
+  return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+}
+
 // ─── Security: Rate Limiting ───────────────────────────────────────────────────
 class SimpleRateLimiter {
   private requests = new Map<string, number[]>();
@@ -192,7 +202,7 @@ app.get('/tools', (req, res) => {
 
   if (!requireRestApiKey(req, res, '/tools')) return;
 
-  const tools = registry.getAllTools();
+  const tools = registry.getAdvertisedTools();
   res.json(tools);
 });
 
@@ -287,7 +297,8 @@ app.post('/actions/:toolName', async (req, res) => {
 
   const { toolName } = req.params;
   const args = (req.body || {}) as Record<string, unknown>;
-  console.log(`[REST] Action from ${clientIp}: ${toolName}`);
+  const deviceId = readDeviceSelector(args);
+  console.log(`[REST] Action from ${clientIp}: ${toolName}${deviceId ? ` (device=${deviceId})` : ''}`);
 
   // REST is stateless — there is no per-connection selected directory, so the
   // default approved directory backstops cwd resolution. Callers should pass an
@@ -295,6 +306,11 @@ app.post('/actions/:toolName', async (req, res) => {
   const baselineDirectory = getDefaultApprovedDirectory();
 
   try {
+    // Discoverability: list connected devices and which one is the default.
+    if (toolName === 'device_list') {
+      res.json({ devices: registry.listDeviceIds(), default: registry.getDefaultDeviceId() });
+      return;
+    }
     if (isDirectoryTool(toolName)) {
       const result = await callDirectoryTool(toolName, args, baselineDirectory);
       res.json(result);
@@ -305,8 +321,11 @@ app.post('/actions/:toolName', async (req, res) => {
       res.json(result);
       return;
     }
-    const sanitized = sanitizeExecutionArgs(toolName, args, baselineDirectory);
-    const result = await registry.callTool(toolName, sanitized);
+    // Device-routed tool: strip the selector before forwarding, then route to
+    // the named device (or the default when none was given).
+    const { device: _d, deviceId: _i, ...toolArgs } = args;
+    const sanitized = sanitizeExecutionArgs(toolName, toolArgs, baselineDirectory);
+    const result = await registry.callToolRouted(toolName, sanitized, deviceId);
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
@@ -657,9 +676,14 @@ function buildMcpServer(): McpServer {
   );
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const tools = [...getDirectoryTools(), ...registry.getAllTools(), ...getJobTools()];
+    const tools = [...getDirectoryTools(), ...registry.getAdvertisedTools(), ...getJobTools()];
     const cliTools = cliRegistry.getAllTools();
     const allTools = [
+      {
+        name: 'device_list',
+        description: 'List connected devices and which one is the default target. Use a device id with the `device` argument to target a specific machine.',
+        inputSchema: { type: 'object', properties: {} as Record<string, unknown> },
+      },
       ...tools.map((t) => ({
         name: t.name,
         description: describeMcpTool(t.name, t.description),
@@ -677,6 +701,10 @@ function buildMcpServer(): McpServer {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
     try {
+      if (name === 'device_list') {
+        const result = { devices: registry.listDeviceIds(), default: registry.getDefaultDeviceId() };
+        return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
+      }
       if (isDirectoryTool(name)) {
         const result = await callDirectoryTool(name, (args ?? {}) as Record<string, unknown>, selectedDirectory);
         if (name === 'directory_select' && typeof result === 'object' && result && 'path' in result) {
@@ -697,9 +725,12 @@ function buildMcpServer(): McpServer {
         }
         return { content: [{ type: 'text', text: JSON.stringify(result) }] };
       }
-      // Device-routed tools: enforce directory policy
-      const sanitizedArgs = sanitizeExecutionArgs(name, (args ?? {}) as Record<string, unknown>, selectedDirectory);
-      const result = await registry.callTool(name, sanitizedArgs);
+      // Device-routed tools: pick the target device, then enforce directory policy
+      const callArgs = (args ?? {}) as Record<string, unknown>;
+      const deviceId = readDeviceSelector(callArgs);
+      const { device: _d, deviceId: _i, ...rest } = callArgs;
+      const sanitizedArgs = sanitizeExecutionArgs(name, rest, selectedDirectory);
+      const result = await registry.callToolRouted(name, sanitizedArgs, deviceId);
       if (result && typeof result === 'object' && 'content' in (result as object)) {
         return result as { content: unknown[] };
       }
@@ -723,17 +754,24 @@ function describeMcpTool(name: string, description: string): string {
 }
 
 function decorateMcpInputSchema(name: string, inputSchema: { type: string; properties?: Record<string, unknown>; required?: string[] }) {
-  if (!isCommandToolName(name)) return inputSchema;
-  return {
-    ...inputSchema,
-    properties: {
-      ...(inputSchema.properties ?? {}),
-      cwd: {
-        type: 'string',
-        description: 'Approved working directory from directory_roots/directory_select.',
-      },
-    },
+  const ids = registry.listDeviceIds().map((d) => d.deviceId);
+  const deviceProp: Record<string, unknown> = {
+    type: 'string',
+    description: `Target device. Omit to use the default (${registry.getDefaultDeviceId() ?? 'first connected device'}).`,
   };
+  if (ids.length > 1) deviceProp.enum = ids;
+
+  const properties: Record<string, unknown> = {
+    ...(inputSchema.properties ?? {}),
+    device: deviceProp,
+  };
+  if (isCommandToolName(name)) {
+    properties.cwd = {
+      type: 'string',
+      description: 'Approved working directory from directory_roots/directory_select.',
+    };
+  }
+  return { ...inputSchema, properties };
 }
 
 function isCommandToolName(name: string): boolean {
@@ -758,7 +796,7 @@ async function callDirectoryTool(
     };
   }
 
-  const deviceId = typeof args.deviceId === 'string' ? args.deviceId : undefined;
+  const deviceId = readDeviceSelector(args);
   const targetDeviceId = registry.getDeviceIdForRequest(deviceId);
   const path = requireString(args.path, 'path');
   const approved = validateDirectoryPath(path).path;
@@ -773,12 +811,12 @@ async function callDirectoryTool(
 }
 
 async function callJobTool(name: string, args: Record<string, unknown>, selectedDirectory?: string): Promise<unknown> {
-  const deviceId = typeof args.deviceId === 'string' ? args.deviceId : undefined;
+  const deviceId = readDeviceSelector(args);
   if (name === 'job_list') {
     return jobs.list(deviceId);
   }
   if (name === 'job_start') {
-    const { deviceId: _deviceId, ...jobArgs } = args as unknown as JobStartArgs & { deviceId?: string };
+    const { deviceId: _deviceId, device: _device, ...jobArgs } = args as unknown as JobStartArgs & { deviceId?: string; device?: string };
     validateJobStartArgs(jobArgs);
     jobArgs.cwd = requireApprovedCwd(jobArgs, selectedDirectory);
     return registry.sendJobStart(jobArgs, deviceId);

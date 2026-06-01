@@ -2,6 +2,30 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
+// ─── Platform abstraction ─────────────────────────────────────────────────────
+// The policy runs on whichever OS the device client is installed on. On Windows
+// it uses win32 path semantics (drive letters, `\`, case-insensitive); on
+// macOS/Linux it uses POSIX semantics (`/`-rooted, case-sensitive). Computed
+// once at load — the host platform does not change at runtime.
+const IS_WINDOWS = process.platform === 'win32';
+const PP = IS_WINDOWS ? path.win32 : path.posix;
+
+function isAbsolutePath(input: string): boolean {
+  return IS_WINDOWS ? /^[a-zA-Z]:[\\/]/.test(input) : input.startsWith('/');
+}
+
+/** Case-insensitive on Windows, case-sensitive on POSIX. */
+function pathKeyOf(input: string): string {
+  return IS_WINDOWS ? input.toLowerCase() : input;
+}
+
+/** True when `child` is the same path as `root` or nested beneath it. */
+function pathWithinRoot(child: string, root: string): boolean {
+  const c = pathKeyOf(child);
+  const r = pathKeyOf(root);
+  return c === r || c.startsWith(`${r}${PP.sep}`);
+}
+
 export interface ApprovedDirectoryRoot {
   id: string;
   label: string;
@@ -54,19 +78,21 @@ function getApprovedDirectoryRoots(): ApprovedDirectoryRoot[] {
   if (roots.length === 0) {
     const homeDir = os.homedir();
     roots.push({ id: 'user_profile', label: 'User profile', path: homeDir });
-    roots.push({ id: 'agent_workspace', label: 'Agent Workspace', path: 'C:\\Agent' });
-    roots.push({ id: 'dev', label: 'Development', path: 'C:\\dev' });
+    if (IS_WINDOWS) {
+      roots.push({ id: 'agent_workspace', label: 'Agent Workspace', path: 'C:\\Agent' });
+      roots.push({ id: 'dev', label: 'Development', path: 'C:\\dev' });
+    }
 
     // Add common subdirectories if they exist
-    const desktop = path.win32.join(homeDir, 'Desktop');
+    const desktop = PP.join(homeDir, 'Desktop');
     if (fs.existsSync(desktop)) {
       roots.push({ id: 'desktop', label: 'Desktop', path: desktop });
     }
-    const documents = path.win32.join(homeDir, 'Documents');
+    const documents = PP.join(homeDir, 'Documents');
     if (fs.existsSync(documents)) {
       roots.push({ id: 'documents', label: 'Documents', path: documents });
     }
-    const downloads = path.win32.join(homeDir, 'Downloads');
+    const downloads = PP.join(homeDir, 'Downloads');
     if (fs.existsSync(downloads)) {
       roots.push({ id: 'downloads', label: 'Downloads', path: downloads });
     }
@@ -133,14 +159,14 @@ export function getDirectoryRoots(): ApprovedDirectory[] {
   refreshApprovedDirectoryRoots();
   return APPROVED_DIRECTORY_ROOTS.map((root) => ({
     name: root.label,
-    path: canonicalizeWindowsPath(root.path),
+    path: canonicalizePath(root.path),
     rootId: root.id,
     rootLabel: root.label,
   }));
 }
 
 export function validateDirectoryPath(input: string, options: { mustExist?: boolean } = {}): ApprovedDirectory {
-  const canonical = canonicalizeWindowsPath(input);
+  const canonical = canonicalizePath(input);
   const root = findContainingRoot(canonical);
   if (!root) {
     throw new Error(`Path is outside the approved directories: ${input}`);
@@ -157,13 +183,13 @@ export function validateDirectoryPath(input: string, options: { mustExist?: bool
     } catch (error: any) {
       throw new Error(`Directory is not available: ${input} (${error.message})`);
     }
-    const realCanonical = canonicalizeWindowsPath(realPath);
+    const realCanonical = canonicalizePath(realPath);
     const realRoot = findContainingRoot(realCanonical);
     if (!realRoot) {
       throw new Error(`Directory resolves outside the approved directories: ${input}`);
     }
     return {
-      name: path.win32.basename(realCanonical) || realCanonical,
+      name: PP.basename(realCanonical) || realCanonical,
       path: realCanonical,
       rootId: realRoot.id,
       rootLabel: realRoot.label,
@@ -171,7 +197,7 @@ export function validateDirectoryPath(input: string, options: { mustExist?: bool
   }
 
   return {
-    name: path.win32.basename(canonical) || canonical,
+    name: PP.basename(canonical) || canonical,
     path: canonical,
     rootId: root.id,
     rootLabel: root.label,
@@ -186,7 +212,7 @@ export function listApprovedChildDirectories(input: string): ApprovedDirectory[]
   for (const entry of entries) {
     if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
     try {
-      const child = validateDirectoryPath(path.win32.join(parent.path, entry.name), { mustExist: true });
+      const child = validateDirectoryPath(PP.join(parent.path, entry.name), { mustExist: true });
       directories.push({ ...child, name: entry.name });
     } catch {
       // Hidden by policy: unavailable directories and symlinks outside approved roots are not selectable.
@@ -271,16 +297,16 @@ function sanitizePathValue(value: unknown, selectedDirectory?: string): unknown 
 function resolveSelectedPath(input: string, selectedDirectory?: string): string {
   const value = input.trim();
   if (!value) throw new Error('Path argument cannot be empty');
-  if (isAbsoluteWindowsPath(value)) {
+  if (isAbsolutePath(value)) {
     return validateDirectoryPath(value).path;
   }
   if (!selectedDirectory) {
     throw new Error(`Relative path requires a selected approved directory: ${input}`);
   }
-  return validateDirectoryPath(path.win32.join(selectedDirectory, value)).path;
+  return validateDirectoryPath(PP.join(selectedDirectory, value)).path;
 }
 
-function canonicalizeWindowsPath(input: string): string {
+function canonicalizePath(input: string): string {
   if (typeof input !== 'string' || !input.trim()) {
     throw new Error('Path is required');
   }
@@ -289,35 +315,41 @@ function canonicalizeWindowsPath(input: string): string {
   if (trimmed.includes('\0')) {
     throw new Error('Path contains a null byte');
   }
-  if (trimmed.startsWith('\\\\') || trimmed.startsWith('//')) {
-    throw new Error('UNC paths are not approved');
-  }
-  if (!isAbsoluteWindowsPath(trimmed)) {
-    throw new Error(`Path must be an absolute Windows path: ${input}`);
+
+  if (IS_WINDOWS) {
+    if (trimmed.startsWith('\\\\') || trimmed.startsWith('//')) {
+      throw new Error('UNC paths are not approved');
+    }
+    if (!isAbsolutePath(trimmed)) {
+      throw new Error(`Path must be an absolute Windows path: ${input}`);
+    }
+    const normalized = path.win32.resolve(trimmed);
+    const parsed = path.win32.parse(normalized);
+    if (!parsed.root || parsed.root.startsWith('\\\\')) {
+      throw new Error(`Path must be on a local drive: ${input}`);
+    }
+    return uppercaseDriveLetter(stripTrailingSlash(normalized));
   }
 
-  const normalized = path.win32.resolve(trimmed);
-  const parsed = path.win32.parse(normalized);
-  if (!parsed.root || parsed.root.startsWith('\\\\')) {
-    throw new Error(`Path must be on a local drive: ${input}`);
+  // POSIX (macOS/Linux): `/`-rooted, case-sensitive, no drive letters.
+  if (!isAbsolutePath(trimmed)) {
+    throw new Error(`Path must be an absolute path: ${input}`);
   }
-  return uppercaseDriveLetter(stripTrailingSlash(normalized));
-}
-
-function isAbsoluteWindowsPath(input: string): boolean {
-  return /^[a-zA-Z]:[\\/]/.test(input);
+  const normalized = path.posix.resolve(trimmed);
+  const stripped = stripTrailingSlash(normalized);
+  return stripped === '' ? '/' : stripped;
 }
 
 function findContainingRoot(canonicalPath: string): ApprovedDirectoryRoot | undefined {
   refreshApprovedDirectoryRoots();
-  const pathKey = canonicalPath.toLowerCase();
   return APPROVED_DIRECTORY_ROOTS
     .map((root) => ({ ...root, path: canonicalizeRoot(root.path) }))
-    .find((root) => pathKey === root.path.toLowerCase() || pathKey.startsWith(`${root.path.toLowerCase()}\\`));
+    .find((root) => pathWithinRoot(canonicalPath, root.path));
 }
 
 function canonicalizeRoot(rootPath: string): string {
-  return stripTrailingSlash(path.win32.resolve(rootPath));
+  const stripped = stripTrailingSlash(PP.resolve(rootPath));
+  return stripped === '' ? PP.sep : stripped;
 }
 
 function stripTrailingSlash(input: string): string {
@@ -329,7 +361,7 @@ function uppercaseDriveLetter(input: string): string {
 }
 
 function withWorkingDirectory(command: string, cwd: string, shell?: string): string {
-  const shellKey = (shell ?? 'powershell').toLowerCase();
+  const shellKey = (shell ?? (IS_WINDOWS ? 'powershell' : 'bash')).toLowerCase();
   if (shellKey.includes('powershell') || shellKey.includes('pwsh')) {
     return `Set-Location -LiteralPath '${cwd.replace(/'/g, "''")}'; ${resolvePowerShellExecutable(command)}`;
   }

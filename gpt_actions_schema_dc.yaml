@@ -1,13 +1,17 @@
 openapi: 3.1.0
 info:
   title: Desktop Commander Remote Actions
-  version: 1.0.0
+  version: 1.1.0
   description: >
     REST Actions wrapper for Desktop Commander Remote hub operations. Each
     operation maps to a POST /actions/<tool> endpoint on the hub, which
     dispatches through the same logic the MCP/SSE path uses. Authenticate with a
     hub API key as a Bearer token (API Key auth in the Custom GPT editor:
     Auth Type = Bearer, Header = Authorization).
+
+    Multi-device: every operation accepts an optional `device` selector. Omit it
+    to run on the default device (msi-windows-main). Call `device_list` to see
+    which machines are connected.
 
 servers:
   - url: https://hub.pkking.computer
@@ -16,7 +20,35 @@ servers:
 security:
   - bearerAuth: []
 
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  schemas:
+    Device:
+      type: string
+      description: Target machine. Omit to use the default (msi-windows-main).
+      enum:
+        - msi-windows-main
+        - hetzner-cloud
+
 paths:
+  /actions/device_list:
+    post:
+      operationId: device_list
+      summary: List connected devices and the default target.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: {}
+      responses:
+        "200":
+          description: Connected devices and the default device id.
+
   /actions/directory_roots:
     post:
       operationId: directory_roots
@@ -28,9 +60,8 @@ paths:
             schema:
               type: object
               properties:
-                deviceId:
-                  type: string
-                  description: Target device id (optional when a single device is connected).
+                device:
+                  $ref: '#/components/schemas/Device'
       responses:
         "200":
           description: Approved root directories and selected directory.
@@ -49,8 +80,8 @@ paths:
               properties:
                 path:
                   type: string
-                deviceId:
-                  type: string
+                device:
+                  $ref: '#/components/schemas/Device'
       responses:
         "200":
           description: Child directories.
@@ -69,8 +100,8 @@ paths:
               properties:
                 path:
                   type: string
-                deviceId:
-                  type: string
+                device:
+                  $ref: '#/components/schemas/Device'
       responses:
         "200":
           description: Selected directory result.
@@ -86,8 +117,8 @@ paths:
             schema:
               type: object
               properties:
-                deviceId:
-                  type: string
+                device:
+                  $ref: '#/components/schemas/Device'
       responses:
         "200":
           description: Current directory and roots.
@@ -110,8 +141,8 @@ paths:
                   type: integer
                 length:
                   type: integer
-                deviceId:
-                  type: string
+                device:
+                  $ref: '#/components/schemas/Device'
       responses:
         "200":
           description: File contents.
@@ -135,8 +166,8 @@ paths:
                 mode:
                   type: string
                   enum: [rewrite, append]
-                deviceId:
-                  type: string
+                device:
+                  $ref: '#/components/schemas/Device'
       responses:
         "200":
           description: Write result.
@@ -155,8 +186,8 @@ paths:
               properties:
                 path:
                   type: string
-                deviceId:
-                  type: string
+                device:
+                  $ref: '#/components/schemas/Device'
       responses:
         "200":
           description: Directory listing.
@@ -179,8 +210,8 @@ paths:
                   type: string
                 timeoutMs:
                   type: number
-                deviceId:
-                  type: string
+                device:
+                  $ref: '#/components/schemas/Device'
       responses:
         "200":
           description: Search results.
@@ -205,8 +236,8 @@ paths:
                   type: integer
                 timeoutMs:
                   type: number
-                deviceId:
-                  type: string
+                device:
+                  $ref: '#/components/schemas/Device'
       responses:
         "200":
           description: Content search results.
@@ -240,8 +271,8 @@ paths:
                   type: number
                 maxOutputBytes:
                   type: number
-                deviceId:
-                  type: string
+                device:
+                  $ref: '#/components/schemas/Device'
       responses:
         "200":
           description: Started job summary.
@@ -260,8 +291,8 @@ paths:
               properties:
                 jobId:
                   type: string
-                deviceId:
-                  type: string
+                device:
+                  $ref: '#/components/schemas/Device'
       responses:
         "200":
           description: Job status.
@@ -285,8 +316,8 @@ paths:
                   enum: [stdout, stderr, both]
                 bytes:
                   type: number
-                deviceId:
-                  type: string
+                device:
+                  $ref: '#/components/schemas/Device'
       responses:
         "200":
           description: Recent job output.
@@ -305,8 +336,8 @@ paths:
               properties:
                 jobId:
                   type: string
-                deviceId:
-                  type: string
+                device:
+                  $ref: '#/components/schemas/Device'
       responses:
         "200":
           description: Cancel result.
@@ -322,14 +353,8 @@ paths:
             schema:
               type: object
               properties:
-                deviceId:
-                  type: string
+                device:
+                  $ref: '#/components/schemas/Device'
       responses:
         "200":
           description: Job list.
-
-components:
-  securitySchemes:
-    bearerAuth:
-      type: http
-      scheme: bearer
