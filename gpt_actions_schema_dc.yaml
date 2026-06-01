@@ -1,0 +1,335 @@
+openapi: 3.1.0
+info:
+  title: Desktop Commander Remote Actions
+  version: 1.0.0
+  description: >
+    REST Actions wrapper for Desktop Commander Remote hub operations. Each
+    operation maps to a POST /actions/<tool> endpoint on the hub, which
+    dispatches through the same logic the MCP/SSE path uses. Authenticate with a
+    hub API key as a Bearer token (API Key auth in the Custom GPT editor:
+    Auth Type = Bearer, Header = Authorization).
+
+servers:
+  - url: https://hub.pkking.computer
+    description: Desktop Commander Remote Hub
+
+security:
+  - bearerAuth: []
+
+paths:
+  /actions/directory_roots:
+    post:
+      operationId: directory_roots
+      summary: List approved root directories and the currently selected one.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceId:
+                  type: string
+                  description: Target device id (optional when a single device is connected).
+      responses:
+        "200":
+          description: Approved root directories and selected directory.
+
+  /actions/directory_list:
+    post:
+      operationId: directory_list
+      summary: List approved child directories under an approved path.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                deviceId:
+                  type: string
+      responses:
+        "200":
+          description: Child directories.
+
+  /actions/directory_select:
+    post:
+      operationId: directory_select
+      summary: Select an approved working directory (stateless per request).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                deviceId:
+                  type: string
+      responses:
+        "200":
+          description: Selected directory result.
+
+  /actions/directory_current:
+    post:
+      operationId: directory_current
+      summary: Show the current default working directory and approved roots.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceId:
+                  type: string
+      responses:
+        "200":
+          description: Current directory and roots.
+
+  /actions/read_file:
+    post:
+      operationId: read_file
+      summary: Read a file from an approved path.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                offset:
+                  type: integer
+                length:
+                  type: integer
+                deviceId:
+                  type: string
+      responses:
+        "200":
+          description: File contents.
+
+  /actions/write_file:
+    post:
+      operationId: write_file
+      summary: Write content to a file under an approved path.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path, content]
+              properties:
+                path:
+                  type: string
+                content:
+                  type: string
+                mode:
+                  type: string
+                  enum: [rewrite, append]
+                deviceId:
+                  type: string
+      responses:
+        "200":
+          description: Write result.
+
+  /actions/list_directory:
+    post:
+      operationId: list_directory
+      summary: List files and directories at an approved path.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path]
+              properties:
+                path:
+                  type: string
+                deviceId:
+                  type: string
+      responses:
+        "200":
+          description: Directory listing.
+
+  /actions/search_files:
+    post:
+      operationId: search_files
+      summary: Search for files by name under an approved path.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path, pattern]
+              properties:
+                path:
+                  type: string
+                pattern:
+                  type: string
+                timeoutMs:
+                  type: number
+                deviceId:
+                  type: string
+      responses:
+        "200":
+          description: Search results.
+
+  /actions/search_code:
+    post:
+      operationId: search_code
+      summary: Search file contents (ripgrep-style) under an approved path.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [path, pattern]
+              properties:
+                path:
+                  type: string
+                pattern:
+                  type: string
+                contextLines:
+                  type: integer
+                timeoutMs:
+                  type: number
+                deviceId:
+                  type: string
+      responses:
+        "200":
+          description: Content search results.
+
+  /actions/job_start:
+    post:
+      operationId: job_start
+      summary: Start a managed CLI job on the device.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [command]
+              properties:
+                command:
+                  type: string
+                args:
+                  type: array
+                  items:
+                    type: string
+                cwd:
+                  type: string
+                  description: Must resolve under an approved directory.
+                env:
+                  type: object
+                  additionalProperties:
+                    type: string
+                timeoutMs:
+                  type: number
+                maxOutputBytes:
+                  type: number
+                deviceId:
+                  type: string
+      responses:
+        "200":
+          description: Started job summary.
+
+  /actions/job_status:
+    post:
+      operationId: job_status
+      summary: Get live status of a managed job from the device.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jobId]
+              properties:
+                jobId:
+                  type: string
+                deviceId:
+                  type: string
+      responses:
+        "200":
+          description: Job status.
+
+  /actions/job_tail:
+    post:
+      operationId: job_tail
+      summary: Read recent stdout/stderr for a managed job.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jobId]
+              properties:
+                jobId:
+                  type: string
+                stream:
+                  type: string
+                  enum: [stdout, stderr, both]
+                bytes:
+                  type: number
+                deviceId:
+                  type: string
+      responses:
+        "200":
+          description: Recent job output.
+
+  /actions/job_cancel:
+    post:
+      operationId: job_cancel
+      summary: Cancel a managed CLI job.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [jobId]
+              properties:
+                jobId:
+                  type: string
+                deviceId:
+                  type: string
+      responses:
+        "200":
+          description: Cancel result.
+
+  /actions/job_list:
+    post:
+      operationId: job_list
+      summary: List managed CLI jobs.
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                deviceId:
+                  type: string
+      responses:
+        "200":
+          description: Job list.
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer

@@ -95,6 +95,7 @@ const urlencodedParser = express.urlencoded({ extended: true });
 app.use('/oauth', jsonParser);
 app.use('/oauth', urlencodedParser);
 app.use('/tools', jsonParser);
+app.use('/actions', jsonParser);
 
 function getPublicUrl(req?: express.Request): string {
   if (process.env.PUBLIC_URL) {
@@ -265,6 +266,47 @@ app.post('/jobs/:jobId/cancel', async (req, res) => {
   if (!requireRestApiKey(req, res, '/jobs/:jobId/cancel')) return;
   try {
     const result = await registry.sendJobCancel(req.params.jobId, req.body?.deviceId);
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── Custom GPT Actions alias layer ───────────────────────────────────────────
+// Named, REST-style POST endpoints (POST /actions/<tool>) so a Custom GPT Action
+// schema can address each tool as a distinct operationId. All requests dispatch
+// through the SAME logic the MCP path uses (callDirectoryTool / callJobTool /
+// sanitizeExecutionArgs + registry.callTool) — no duplicated tool handling.
+app.post('/actions/:toolName', async (req, res) => {
+  const clientIp = getClientIp(req);
+  if (!restRateLimiter.isAllowed(`actions:${clientIp}`, 60, 60000)) {
+    res.status(429).json({ error: 'Too many requests' });
+    return;
+  }
+  if (!requireRestApiKey(req, res, `/actions/${req.params.toolName}`)) return;
+
+  const { toolName } = req.params;
+  const args = (req.body || {}) as Record<string, unknown>;
+  console.log(`[REST] Action from ${clientIp}: ${toolName}`);
+
+  // REST is stateless — there is no per-connection selected directory, so the
+  // default approved directory backstops cwd resolution. Callers should pass an
+  // explicit path/cwd (validated against directory policy) on each request.
+  const baselineDirectory = getDefaultApprovedDirectory();
+
+  try {
+    if (isDirectoryTool(toolName)) {
+      const result = await callDirectoryTool(toolName, args, baselineDirectory);
+      res.json(result);
+      return;
+    }
+    if (toolName.startsWith('job_')) {
+      const result = await callJobTool(toolName, args, baselineDirectory);
+      res.json(result);
+      return;
+    }
+    const sanitized = sanitizeExecutionArgs(toolName, args, baselineDirectory);
+    const result = await registry.callTool(toolName, sanitized);
     res.json(result);
   } catch (err: any) {
     res.status(500).json({ error: err.message });
