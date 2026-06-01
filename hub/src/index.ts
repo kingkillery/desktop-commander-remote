@@ -65,6 +65,14 @@ function readDeviceSelector(args: Record<string, unknown> | undefined): string |
   return typeof v === 'string' && v.trim() ? v.trim() : undefined;
 }
 
+/** True when the call targets an explicitly-named device other than the hub's
+ *  co-located default. The hub's (local-OS) directory policy is only valid for
+ *  the default device; remote devices enforce their own policy, so the hub must
+ *  forward their paths/cwd unsanitized. */
+function isRemoteDevice(deviceId?: string): boolean {
+  return !!deviceId && deviceId !== registry.getDefaultDeviceId();
+}
+
 // ─── Security: Rate Limiting ───────────────────────────────────────────────────
 class SimpleRateLimiter {
   private requests = new Map<string, number[]>();
@@ -322,9 +330,13 @@ app.post('/actions/:toolName', async (req, res) => {
       return;
     }
     // Device-routed tool: strip the selector before forwarding, then route to
-    // the named device (or the default when none was given).
+    // the named device (or the default when none was given). Apply the hub's
+    // directory policy only for the co-located default device; remote devices
+    // enforce their own policy.
     const { device: _d, deviceId: _i, ...toolArgs } = args;
-    const sanitized = sanitizeExecutionArgs(toolName, toolArgs, baselineDirectory);
+    const sanitized = isRemoteDevice(deviceId)
+      ? toolArgs
+      : sanitizeExecutionArgs(toolName, toolArgs, baselineDirectory);
     const result = await registry.callToolRouted(toolName, sanitized, deviceId);
     res.json(result);
   } catch (err: any) {
@@ -725,11 +737,14 @@ function buildMcpServer(): McpServer {
         }
         return { content: [{ type: 'text', text: JSON.stringify(result) }] };
       }
-      // Device-routed tools: pick the target device, then enforce directory policy
+      // Device-routed tools: pick the target device, then enforce directory
+      // policy for the local device only (remote devices self-enforce).
       const callArgs = (args ?? {}) as Record<string, unknown>;
       const deviceId = readDeviceSelector(callArgs);
       const { device: _d, deviceId: _i, ...rest } = callArgs;
-      const sanitizedArgs = sanitizeExecutionArgs(name, rest, selectedDirectory);
+      const sanitizedArgs = isRemoteDevice(deviceId)
+        ? rest
+        : sanitizeExecutionArgs(name, rest, selectedDirectory);
       const result = await registry.callToolRouted(name, sanitizedArgs, deviceId);
       if (result && typeof result === 'object' && 'content' in (result as object)) {
         return result as { content: unknown[] };
@@ -783,42 +798,50 @@ async function callDirectoryTool(
   args: Record<string, unknown>,
   selectedDirectory?: string
 ): Promise<unknown> {
-  if (name === 'directory_roots') {
-    return {
-      roots: getDirectoryRoots(),
-      selected: selectedDirectory ? validateDirectoryPath(selectedDirectory) : undefined,
-    };
-  }
-  if (name === 'directory_current') {
-    return {
-      selected: selectedDirectory ? validateDirectoryPath(selectedDirectory) : undefined,
-      roots: getDirectoryRoots(),
-    };
-  }
-
   const deviceId = readDeviceSelector(args);
   const targetDeviceId = registry.getDeviceIdForRequest(deviceId);
+  const remote = isRemoteDevice(deviceId);
+
+  if (name === 'directory_roots' || name === 'directory_current') {
+    // Remote device: report that device's own approved roots.
+    if (remote) {
+      const res = (await registry.callToolOnDevice(targetDeviceId, '__directory_roots', {}, undefined, 30_000)) as { roots?: unknown };
+      return { roots: res?.roots ?? [], selected: undefined };
+    }
+    return {
+      roots: getDirectoryRoots(),
+      selected: selectedDirectory ? validateDirectoryPath(selectedDirectory) : undefined,
+    };
+  }
+
   const path = requireString(args.path, 'path');
-  const approved = validateDirectoryPath(path).path;
+  // For a remote device, forward the raw path — the device validates against
+  // its own approved roots. For the local device, enforce the hub's policy.
+  const forwardedPath = remote ? path : validateDirectoryPath(path).path;
 
   if (name === 'directory_list') {
-    return registry.callToolOnDevice(targetDeviceId, '__directory_list', { path: approved }, undefined, 30_000);
+    return registry.callToolOnDevice(targetDeviceId, '__directory_list', { path: forwardedPath }, undefined, 30_000);
   }
   if (name === 'directory_select') {
-    return registry.callToolOnDevice(targetDeviceId, '__directory_select', { path: approved }, undefined, 30_000);
+    return registry.callToolOnDevice(targetDeviceId, '__directory_select', { path: forwardedPath }, undefined, 30_000);
   }
   throw new Error(`Unknown directory tool: ${name}`);
 }
 
 async function callJobTool(name: string, args: Record<string, unknown>, selectedDirectory?: string): Promise<unknown> {
   const deviceId = readDeviceSelector(args);
+  const remote = isRemoteDevice(deviceId);
   if (name === 'job_list') {
     return jobs.list(deviceId);
   }
   if (name === 'job_start') {
     const { deviceId: _deviceId, device: _device, ...jobArgs } = args as unknown as JobStartArgs & { deviceId?: string; device?: string };
     validateJobStartArgs(jobArgs);
-    jobArgs.cwd = requireApprovedCwd(jobArgs, selectedDirectory);
+    // Hub enforces an approved cwd for the local device; remote devices validate
+    // their own cwd, so forward whatever the caller provided.
+    if (!remote) {
+      jobArgs.cwd = requireApprovedCwd(jobArgs, selectedDirectory);
+    }
     return registry.sendJobStart(jobArgs, deviceId);
   }
   if (name === 'job_status') {
