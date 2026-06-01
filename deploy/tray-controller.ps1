@@ -161,6 +161,43 @@ function Get-HubDeviceSummary {
     }
 }
 
+function Get-RemoteSshTarget {
+    $val = Get-EnvValue 'DC_REMOTE_SSH'
+    if ($val) { return $val }
+    return 'root@100.64.216.11'
+}
+
+function Get-RemoteServiceName {
+    $val = Get-EnvValue 'DC_REMOTE_SERVICE'
+    if ($val) { return $val }
+    return 'dc-device.service'
+}
+
+function Restart-RemoteDevice {
+    # Restart the remote device client over Tailscale SSH (e.g. the hetzner-cloud
+    # systemd service). Uses key-based OpenSSH; the tray user must have an SSH key
+    # authorized on the remote host.
+    $target = Get-RemoteSshTarget
+    $svc = Get-RemoteServiceName
+    Write-TrayLog "Restarting remote device $target ($svc)"
+    try {
+        $out = & ssh.exe -o BatchMode=yes -o ConnectTimeout=10 -o StrictHostKeyChecking=accept-new $target "systemctl restart $svc; sleep 1; systemctl is-active $svc" 2>&1 | Out-String
+        $code = $LASTEXITCODE
+        $status = ($out -split "`n" | Where-Object { $_.Trim() } | Select-Object -Last 1)
+        if ($status) { $status = $status.Trim() }
+        if ($code -eq 0 -and $status -eq 'active') {
+            [System.Windows.Forms.MessageBox]::Show("Restarted $svc on $target.`nStatus: active", 'Remote device', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+        } else {
+            [System.Windows.Forms.MessageBox]::Show("Restart returned exit $code (status: $status).`n`n$out", 'Remote device', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning) | Out-Null
+        }
+    } catch {
+        Write-TrayLog "Remote restart error: $($_.Exception.Message)"
+        [System.Windows.Forms.MessageBox]::Show("SSH error: $($_.Exception.Message)", 'Remote device', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error) | Out-Null
+    }
+    Start-Sleep -Milliseconds 500
+    Refresh-Tray
+}
+
 function Stop-RepoProcesses([string[]]$patterns) {
     $processes = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
         $cmd = $_.CommandLine
@@ -328,6 +365,11 @@ $restartItem.Add_Click({
 })
 [void]$contextMenu.Items.Add($restartItem)
 
+$restartRemoteItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$restartRemoteItem.Text = 'Restart remote device (SSH)'
+$restartRemoteItem.Add_Click({ Restart-RemoteDevice })
+[void]$contextMenu.Items.Add($restartRemoteItem)
+
 $setHubUrlItem = New-Object System.Windows.Forms.ToolStripMenuItem
 $setHubUrlItem.Text = 'Set Hub URL...'
 $setHubUrlItem.Add_Click({
@@ -380,6 +422,18 @@ $setHomeDirItem.Add_Click({
     }
 })
 [void]$contextMenu.Items.Add($setHomeDirItem)
+
+$setRemoteSshItem = New-Object System.Windows.Forms.ToolStripMenuItem
+$setRemoteSshItem.Text = 'Set remote device SSH target...'
+$setRemoteSshItem.Add_Click({
+    Add-Type -AssemblyName Microsoft.VisualBasic
+    $current = Get-RemoteSshTarget
+    $newTarget = [Microsoft.VisualBasic.Interaction]::InputBox('Enter the remote device SSH target (user@host):', 'Set Remote SSH Target', $current)
+    if ($newTarget -and $newTarget.Trim()) {
+        Set-EnvValue 'DC_REMOTE_SSH' $newTarget.Trim()
+    }
+})
+[void]$contextMenu.Items.Add($setRemoteSshItem)
 
 [void]$contextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
 
